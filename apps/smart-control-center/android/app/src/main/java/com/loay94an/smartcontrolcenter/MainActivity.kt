@@ -3,6 +3,7 @@ package com.loay94an.smartcontrolcenter
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -26,6 +27,11 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 private val sections = listOf("الرئيسية", "ملفات PDF", "OCR", "النماذج والمحادثة", "المتصفح", "GitHub", "الطرفية والمهام", "الإعدادات", "دليل الاستخدام")
 
@@ -43,7 +49,7 @@ private fun SmartControlCenter(initialText: String) {
     val prefs = remember { context.getSharedPreferences("smart_control_center", MODE_PRIVATE) }
     var section by remember { mutableStateOf("الرئيسية") }
     var bridge by remember { mutableStateOf(prefs.getString("bridge", "http://127.0.0.1:8765") ?: "http://127.0.0.1:8765") }
-    var token by remember { mutableStateOf(prefs.getString("token", "") ?: "") }
+    var token by remember { mutableStateOf(SecureTokenStore.read(prefs)) }
     var modelEndpoint by remember { mutableStateOf(prefs.getString("modelEndpoint", "http://127.0.0.1:8080/v1") ?: "http://127.0.0.1:8080/v1") }
     var githubToken by remember { mutableStateOf("") }
     var repo by remember { mutableStateOf("loay94an/Translation-pdf-and-text-extraction-") }
@@ -61,7 +67,7 @@ private fun SmartControlCenter(initialText: String) {
 
     fun saveSettings() {
         prefs.edit().putString("bridge", bridge.trim().trimEnd('/'))
-            .putString("token", token.trim()).putString("modelEndpoint", modelEndpoint.trim().trimEnd('/')).apply()
+            .putString("modelEndpoint", modelEndpoint.trim().trimEnd('/')).apply()\n        SecureTokenStore.write(prefs, token.trim())
     }
     suspend fun call(path: String, method: String = "GET", body: String? = null, raw: ByteArray? = null, mime: String = "application/octet-stream"): String =
         withContext(Dispatchers.IO) {
@@ -266,7 +272,7 @@ private fun SmartControlCenter(initialText: String) {
 }
 
 @Composable
-private fun SelectionContainerCompat(value: String) {
+private object SecureTokenStore {\n    private const val alias = "smart_control_center_bridge_token"\n    fun read(prefs: android.content.SharedPreferences): String = try {\n        val stored = prefs.getString("token_encrypted", null) ?: return ""\n        val parts = stored.split(":")\n        val cipher = Cipher.getInstance("AES/GCM/NoPadding")\n        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)))\n        String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), StandardCharsets.UTF_8)\n    } catch (_: Exception) { "" }\n    fun write(prefs: android.content.SharedPreferences, value: String) {\n        if (value.isBlank()) { prefs.edit().remove("token_encrypted").apply(); return }\n        val cipher = Cipher.getInstance("AES/GCM/NoPadding")\n        cipher.init(Cipher.ENCRYPT_MODE, key())\n        val encrypted = cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8))\n        val stored = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(encrypted, Base64.NO_WRAP)\n        prefs.edit().putString("token_encrypted", stored).remove("token").apply()\n    }\n    private fun key(): SecretKey {\n        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }\n        (store.getKey(alias, null) as? SecretKey)?.let { return it }\n        val generator = KeyGenerator.getInstance("AES", "AndroidKeyStore")\n        generator.init(android.security.keystore.KeyGenParameterSpec.Builder(alias, android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT)\n            .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)\n            .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)\n            .setRandomizedEncryptionRequired(true).build())\n        return generator.generateKey()\n    }\n}\n\n@Composable\nprivate fun SelectionContainerCompat(value: String) {
     Text(value, style = MaterialTheme.typography.bodyMedium)
 }
 
