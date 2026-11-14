@@ -1,6 +1,9 @@
 package com.loay94an.smartcontrolcenter
 
 import android.content.Intent
+import android.app.PendingIntent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
@@ -18,9 +21,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -36,12 +41,63 @@ import javax.crypto.spec.GCMParameterSpec
 private val sections = listOf("الرئيسية", "ملفات PDF", "OCR", "النماذج والمحادثة", "المتصفح", "GitHub", "الطرفية والمهام", "الإعدادات", "دليل الاستخدام")
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        private const val ACTION_TERMUX_AUTO_RESULT = "com.loay94an.smartcontrolcenter.TERMUX_AUTO_RESULT"
+    }
+    private var termuxAutoResult: CompletableDeferred<String>? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val incoming = intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString().orEmpty()
         @Suppress("DEPRECATION")
         val incomingUri = intent?.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
         setContent { MaterialTheme { SmartControlCenter(initialText = incoming, initialPdfUri = incomingUri) } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == ACTION_TERMUX_AUTO_RESULT) {
+            val result = intent.getBundleExtra("result")
+            val stdout = result?.getString("stdout").orEmpty()
+            val stderr = result?.getString("stderr").orEmpty()
+            val exitCode = result?.getInt("exitCode", 1) ?: 1
+            termuxAutoResult?.complete(if (exitCode == 0) stdout else "ERROR: $stderr")
+        }
+    }
+
+    suspend fun autoConnectTermux(): String {
+        if (packageManager.getLaunchIntentForPackage("com.termux") == null) error("ثبّت Termux أولًا.")
+        if (checkSelfPermission("com.termux.permission.RUN_COMMAND") != PackageManager.PERMISSION_GRANTED)
+            error("اسمح للتطبيق بصلاحية RUN_COMMAND من إعدادات Android، وفعّل allow-external-apps في Termux.")
+        val deferred = CompletableDeferred<String>()
+        termuxAutoResult = deferred
+        val requestCode = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
+        val resultIntent = Intent(this, MainActivity::class.java).setAction(ACTION_TERMUX_AUTO_RESULT)
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getActivity(this, requestCode, resultIntent, flags)
+        val command = Intent().apply {
+            setClassName("com.termux", "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", "\$HOME/.local/bin/control-center-bridge-connect"))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("pendingIntent", pending)
+        }
+        try {
+            startService(command)
+            val raw = withTimeout(60000) { deferred.await() }.trim()
+            if (raw.startsWith("ERROR:")) error(raw.removePrefix("ERROR:").trim())
+            val found = Regex("(?m)^([a-f0-9]{64})$").find(raw)?.groupValues?.get(1)
+                ?: error(raw.ifBlank { "لم يرجع Termux رمز الربط. شغّل setup-auto-connect.sh مرة واحدة أولًا." })
+            return found
+        } catch (error: SecurityException) {
+            throw IllegalStateException("رفض Android تشغيل أوامر Termux. تحقق من RUN_COMMAND وallow-external-apps.")
+        } finally {
+            termuxAutoResult = null
+        }
     }
 }
 
