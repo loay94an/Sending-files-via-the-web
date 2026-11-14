@@ -275,13 +275,15 @@ private fun SmartControlCenter(initialText: String) {
 private object SecureTokenStore {
     private const val alias = "smart_control_center_bridge_token"
 
-    fun read(prefs: android.content.SharedPreferences): String = try {
-        val stored = prefs.getString("token_encrypted", null) ?: return ""
-        val parts = stored.split(":")
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)))
-        String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), StandardCharsets.UTF_8)
-    } catch (_: Exception) { "" }
+    fun read(prefs: android.content.SharedPreferences): String {
+        return try {
+            val stored = prefs.getString("token_encrypted", null) ?: return ""
+            val parts = stored.split(":")
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)))
+            String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), StandardCharsets.UTF_8)
+        } catch (_: Exception) { "" }
+    }
 
     fun write(prefs: android.content.SharedPreferences, value: String) {
         if (value.isBlank()) {
