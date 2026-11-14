@@ -400,7 +400,6 @@ private fun SmartControlCenter(activity: MainActivity, initialText: String, init
     }
 }
 
-@Composable
 private object SecureTokenStore {
     private const val alias = "smart_control_center_bridge_token"
 
