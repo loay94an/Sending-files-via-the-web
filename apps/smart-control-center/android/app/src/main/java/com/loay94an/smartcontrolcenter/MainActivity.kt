@@ -54,6 +54,8 @@ private fun SmartControlCenter(initialText: String) {
     var githubToken by remember { mutableStateOf("") }
     var repo by remember { mutableStateOf("loay94an/Translation-pdf-and-text-extraction-") }
     var branch by remember { mutableStateOf("feature/smart-control-center-app") }
+    var githubPath by remember { mutableStateOf("exports/extracted-pages.txt") }
+    var githubMessage by remember { mutableStateOf("Export extracted text from Smart PDF Control Center") }
     var command by remember { mutableStateOf("pwd && ls -lah") }
     var prompt by remember { mutableStateOf(initialText) }
     var selectedModel by remember { mutableStateOf("") }
@@ -152,7 +154,8 @@ private fun SmartControlCenter(initialText: String) {
                         Text("المسار في مساحة Termux: ${pdfPath.ifBlank { "لم يتم استيراد ملف بعد" }}")
                         OutlinedButton(enabled = !busy && pdfPath.isNotBlank() && token.isNotBlank(), onClick = { launchTask {
                             val safe = pdfPath.replace("'", "'\\''")
-                            val result = JSONObject(call("/api/exec", "POST", JSONObject().put("command", "pdftotext -layout '$safe' -").put("cwd", ".").toString()))
+                            val cmd = "pages=$(pdfinfo '$safe' | awk '/Pages:/ {print $2}'); for p in $(seq 1 \"\$pages\"); do echo \"=== PAGE \$p ===\"; pdftotext -f \"\$p\" -l \"\$p\" -layout '$safe' -; done"
+                            val result = JSONObject(call("/api/exec", "POST", JSONObject().put("command", cmd).put("cwd", ".").toString()))
                             extracted = result.optString("stdout")
                             "اكتمل استخراج النص. رمز الخروج: ${result.optInt("exitCode")}\n\n${extracted.take(12000)}"
                         } }) { Text("استخراج النص المضمن") }
@@ -215,7 +218,16 @@ private fun SmartControlCenter(initialText: String) {
                             val result = JSONObject(call("/api/github/connect", "POST", JSONObject().put("token", githubToken).toString()))
                             "تم ربط GitHub بالحساب: ${result.optString("login")}"
                         } }) { Text("ربط GitHub") }
-                        Text("امنح الرمز صلاحية Contents حسب الحاجة وعلى المستودع المطلوب فقط. لا تشارك الرمز ولا تضعه في ملفات المشروع.")
+                        OutlinedTextField(value = githubPath, onValueChange = { githubPath = it }, label = { Text("مسار ملف التصدير داخل المستودع") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = githubMessage, onValueChange = { githubMessage = it }, label = { Text("رسالة الالتزام") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedButton(enabled = !busy && token.isNotBlank() && extracted.isNotBlank() && githubPath.isNotBlank(), onClick = { launchTask {
+                            val encoded = Base64.encodeToString(extracted.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
+                            val payload = JSONObject().put("repo", repo).put("branch", branch).put("path", githubPath)
+                                .put("message", githubMessage).put("contentBase64", encoded)
+                            val result = JSONObject(call("/api/github/upload", "POST", payload.toString()))
+                            "تم رفع الملف النصي إلى GitHub: \${result.optString("path")}\nCommit: \${result.optString("commit")}"
+                        } }) { Text("رفع النص المستخرج إلى GitHub") }
+                        Text("اربط GitHub أولًا. امنح الرمز صلاحية Contents على المستودع المطلوب فقط. لا ترفع كتبًا محمية أو ملفات خاصة إلى مستودع عام.")
                     }
                     "الطرفية والمهام" -> {
                         Text("طرفية Linux والمهام", style = MaterialTheme.typography.headlineSmall)
