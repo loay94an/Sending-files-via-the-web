@@ -1,6 +1,11 @@
 name: Smart PDF Control Center Android
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [feature/pdf-page-export-local-model-chat]
+    paths:
+      - 'apps/smart-control-center/**'
+      - '.github/workflows/smart-control-center-android.yml'
   push:
     branches: [feature/smart-pdf-control-center-app]
     paths:
