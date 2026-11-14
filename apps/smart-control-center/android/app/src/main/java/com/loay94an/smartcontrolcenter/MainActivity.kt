@@ -106,13 +106,37 @@ private fun SmartControlCenter(initialText: String) {
             busy = false
         }
     }
+    suspend fun uploadPdf(uri: Uri): JSONObject = withContext(Dispatchers.IO) {
+        val connection = (URL(bridge.trim().trimEnd('/') + "/api/files/pdf").openConnection() as HttpURLConnection)
+        try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 15000
+            connection.readTimeout = 120000
+            connection.doOutput = true
+            connection.setChunkedStreamingMode(64 * 1024)
+            connection.setRequestProperty("Authorization", "Bearer ${token.trim()}")
+            connection.setRequestProperty("Content-Type", "application/pdf")
+            val source = context.contentResolver.openInputStream(uri)?.buffered() ?: error("تعذر فتح ملف PDF")
+            source.use { input ->
+                input.mark(8)
+                val signature = ByteArray(5)
+                val count = input.read(signature)
+                require(count == 5 && String(signature) == "%PDF-") { "الملف ليس PDF صالحًا" }
+                input.reset()
+                connection.outputStream.use { output -> input.copyTo(output, 64 * 1024) }
+            }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) error("HTTP $code: ${response.take(500)}")
+            JSONObject(response)
+        } finally { connection.disconnect() }
+    }
     val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) launchTask {
-            val bytes = withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("تعذر قراءة الملف") }
-            require(bytes.size >= 5 && String(bytes.copyOfRange(0, 5)) == "%PDF-") { "الملف ليس PDF صالحًا" }
-            val result = JSONObject(call("/api/files/pdf", "POST", raw = bytes, mime = "application/pdf"))
+            val result = uploadPdf(uri)
             pdfPath = result.optString("path")
-            "تم استيراد الملف إلى مساحة عمل Termux\nالمسار: $pdfPath\nالحجم: ${bytes.size} bytes"
+            "تم استيراد PDF بالتدفق المباشر إلى مساحة Termux\nالمسار: $pdfPath"
         }
     }
 
