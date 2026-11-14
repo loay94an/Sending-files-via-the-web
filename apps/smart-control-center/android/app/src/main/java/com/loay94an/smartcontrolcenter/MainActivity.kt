@@ -225,7 +225,7 @@ private fun SmartControlCenter(initialText: String) {
                             val payload = JSONObject().put("repo", repo).put("branch", branch).put("path", githubPath)
                                 .put("message", githubMessage).put("contentBase64", encoded)
                             val result = JSONObject(call("/api/github/upload", "POST", payload.toString()))
-                            "تم رفع الملف النصي إلى GitHub: \${result.optString("path")}\nCommit: \${result.optString("commit")}"
+                            "تم رفع الملف النصي إلى GitHub: ${result.optString("path")}\nCommit: ${result.optString("commit")}"
                         } }) { Text("رفع النص المستخرج إلى GitHub") }
                         Text("اربط GitHub أولًا. امنح الرمز صلاحية Contents على المستودع المطلوب فقط. لا ترفع كتبًا محمية أو ملفات خاصة إلى مستودع عام.")
                     }
