@@ -104,6 +104,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun SmartControlCenter(initialText: String, initialPdfUri: Uri?) {
     val context = LocalContext.current
+    val activity = context as MainActivity
     val prefs = remember { context.getSharedPreferences("smart_control_center", MODE_PRIVATE) }
     var section by remember { mutableStateOf("الرئيسية") }
     var bridge by remember { mutableStateOf(prefs.getString("bridge", "http://127.0.0.1:8765") ?: "http://127.0.0.1:8765") }
@@ -339,6 +340,13 @@ private fun SmartControlCenter(initialText: String, initialPdfUri: Uri?) {
                         OutlinedTextField(value = bridge, onValueChange = { bridge = it }, label = { Text("عنوان جسر Termux") }, modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(value = token, onValueChange = { token = it }, label = { Text("رمز Bearer") }, modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(value = modelEndpoint, onValueChange = { modelEndpoint = it }, label = { Text("عنوان النموذج المحلي") }, modifier = Modifier.fillMaxWidth())
+                        Button(enabled = !busy, onClick = { launchTask {
+                            val pairedToken = activity.autoConnectTermux()
+                            token = pairedToken
+                            saveSettings()
+                            val health = JSONObject(call("/api/health"))
+                            "تم الربط التلقائي بنجاح: " + health.optString("platform")
+                        } }) { Text("ربط Termux تلقائيًا واستخراج الرمز") }
                         Button(onClick = { saveSettings(); status = "تم حفظ الإعدادات محليًا" }) { Text("حفظ الإعدادات") }
                         Button(enabled = !busy && token.isNotBlank(), onClick = { saveSettings(); launchTask {
                             val result = JSONObject(call("/api/health"))
