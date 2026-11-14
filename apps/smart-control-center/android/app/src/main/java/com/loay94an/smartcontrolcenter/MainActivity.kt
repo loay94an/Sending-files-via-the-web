@@ -67,7 +67,8 @@ private fun SmartControlCenter(initialText: String) {
 
     fun saveSettings() {
         prefs.edit().putString("bridge", bridge.trim().trimEnd('/'))
-            .putString("modelEndpoint", modelEndpoint.trim().trimEnd('/')).apply()\n        SecureTokenStore.write(prefs, token.trim())
+            .putString("modelEndpoint", modelEndpoint.trim().trimEnd('/')).apply()
+        SecureTokenStore.write(prefs, token.trim())
     }
     suspend fun call(path: String, method: String = "GET", body: String? = null, raw: ByteArray? = null, mime: String = "application/octet-stream"): String =
         withContext(Dispatchers.IO) {
