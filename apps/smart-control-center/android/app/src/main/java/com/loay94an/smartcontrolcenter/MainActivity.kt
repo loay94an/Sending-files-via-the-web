@@ -117,6 +117,7 @@ private fun SmartControlCenter(initialText: String, initialPdfUri: Uri?) {
     var githubMessage by remember { mutableStateOf("Export extracted text from Smart PDF Control Center") }
     var command by remember { mutableStateOf("pwd && ls -lah") }
     var prompt by remember { mutableStateOf(initialText) }
+    var chatHistory by remember { mutableStateOf(listOf<Pair<String, String>>()) }
     var selectedModel by remember { mutableStateOf("") }
     var models by remember { mutableStateOf(listOf<String>()) }
     var pdfPath by remember { mutableStateOf("") }
@@ -192,13 +193,13 @@ private fun SmartControlCenter(initialText: String, initialPdfUri: Uri?) {
         } finally { connection.disconnect() }
     }
     val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) launchTask {
+        if (uri != null && token.isNotBlank()) launchTask {
             val result = uploadPdf(uri)
             pdfPath = result.optString("path")
             "تم استيراد PDF بالتدفق المباشر إلى مساحة Termux\nالمسار: $pdfPath"
         }
     }
-    LaunchedEffect(initialPdfUri) {
+    LaunchedEffect(initialPdfUri, token) {
         val uri = initialPdfUri
         if (uri != null) launchTask {
             val result = uploadPdf(uri)
@@ -281,12 +282,24 @@ private fun SmartControlCenter(initialText: String, initialPdfUri: Uri?) {
                             Text("النموذج المختار")
                             models.forEach { name -> Row { RadioButton(selected = selectedModel == name, onClick = { selectedModel = name }); Text(name, Modifier.padding(top = 12.dp)) } }
                         }
+                        chatHistory.forEach { (role, message) ->
+                            Text(if (role == "user") "أنت" else "النموذج المحلي", fontWeight = FontWeight.Bold)
+                            Text(message)
+                        }
+                        OutlinedButton(enabled = extracted.isNotBlank(), onClick = { prompt = extracted }) { Text("إرفاق النص المستخرج بالمحادثة") }
                         OutlinedTextField(value = prompt, onValueChange = { prompt = it }, label = { Text("اكتب سؤالك أو ألصق النص للتحليل") }, modifier = Modifier.fillMaxWidth(), minLines = 5)
                         Button(enabled = !busy && token.isNotBlank() && prompt.isNotBlank() && selectedModel.isNotBlank(), onClick = { launchTask {
-                            val messages = JSONArray().put(JSONObject().put("role", "user").put("content", prompt))
+                            val messages = JSONArray()
+                            (chatHistory.takeLast(18) + listOf("user" to prompt)).forEach { (role, message) ->
+                                messages.put(JSONObject().put("role", role).put("content", message))
+                            }
                             val result = JSONObject(call("/api/chat", "POST", JSONObject().put("provider", "local").put("model", selectedModel).put("messages", messages).toString()))
-                            result.optString("content")
+                            val answer = result.optString("content")
+                            chatHistory = chatHistory + listOf("user" to prompt, "assistant" to answer)
+                            prompt = ""
+                            answer
                         } }) { Text("إرسال إلى النموذج المحلي") }
+                        OutlinedButton(enabled = chatHistory.isNotEmpty(), onClick = { chatHistory = emptyList() }) { Text("مسح المحادثة") }
                     }
                     "المتصفح" -> {
                         Text("المتصفح", style = MaterialTheme.typography.headlineSmall)
