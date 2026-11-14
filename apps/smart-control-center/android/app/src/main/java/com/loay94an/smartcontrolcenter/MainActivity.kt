@@ -113,6 +113,8 @@ private fun SmartControlCenter(initialText: String, initialPdfUri: Uri?) {
     var githubToken by remember { mutableStateOf("") }
     var repo by remember { mutableStateOf("loay94an/Translation-pdf-and-text-extraction-") }
     var branch by remember { mutableStateOf("feature/smart-control-center-app") }
+    var ocrLanguages by remember { mutableStateOf("ara+eng") }
+    var ocrDpi by remember { mutableStateOf("250") }
     var githubPath by remember { mutableStateOf("exports/extracted-pages.txt") }
     var githubMessage by remember { mutableStateOf("Export extracted text from Smart PDF Control Center") }
     var command by remember { mutableStateOf("pwd && ls -lah") }
@@ -259,10 +261,14 @@ private fun SmartControlCenter(initialText: String, initialPdfUri: Uri?) {
                     }
                     "OCR" -> {
                         Text("إعدادات OCR", style = MaterialTheme.typography.headlineSmall)
+                        OutlinedTextField(value = ocrLanguages, onValueChange = { ocrLanguages = it }, label = { Text("لغات Tesseract مثل ara+eng") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = ocrDpi, onValueChange = { ocrDpi = it.filter(Char::isDigit).take(3) }, label = { Text("دقة التحويل DPI (100–600)") }, modifier = Modifier.fillMaxWidth())
                         Text("استخدم Poppler لتحويل الصفحات المصورة إلى صور، ثم Tesseract للتعرف على العربية والإنجليزية.")
                         OutlinedButton(enabled = !busy && token.isNotBlank() && pdfPath.isNotBlank(), onClick = { launchTask {
                             val safe = pdfPath.replace("'", "'\\''")
-                            val cmd = "mkdir -p ocr && pdftoppm -r 250 -png '$safe' ocr/page && for f in ocr/page-*.png; do [ -f \"\$f\" ] || continue; echo \"--- \$f ---\"; tesseract \"\$f\" stdout -l ara+eng 2>/dev/null; done"
+                            val dpi = ocrDpi.toIntOrNull()?.takeIf { it in 100..600 } ?: error("قيمة DPI يجب أن تكون بين 100 و600")
+                            require(ocrLanguages.matches(Regex("[A-Za-z0-9_+.-]{2,80}"))) { "رمز لغة OCR غير صالح" }
+                            val cmd = "mkdir -p ocr exports && pdftoppm -r $dpi -png '$safe' ocr/page && for f in ocr/page-*.png; do [ -f \"\$f\" ] || continue; echo \"--- \$f ---\"; tesseract \"\$f\" stdout -l $ocrLanguages 2>/dev/null; done | tee exports/ocr.txt"
                             val result = JSONObject(call("/api/exec", "POST", JSONObject().put("command", cmd).put("cwd", ".").toString()))
                             result.optString("stdout") + "\n" + result.optString("stderr")
                         } }) { Text("تشغيل OCR عربي + إنجليزي") }
