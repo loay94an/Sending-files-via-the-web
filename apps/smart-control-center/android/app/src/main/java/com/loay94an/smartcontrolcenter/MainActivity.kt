@@ -51,7 +51,7 @@ class MainActivity : ComponentActivity() {
         val incoming = intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString().orEmpty()
         @Suppress("DEPRECATION")
         val incomingUri = intent?.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
-        setContent { MaterialTheme { SmartControlCenter(initialText = incoming, initialPdfUri = incomingUri) } }
+        setContent { MaterialTheme { SmartControlCenter(activity = this, initialText = incoming, initialPdfUri = incomingUri) } }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -102,9 +102,8 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun SmartControlCenter(initialText: String, initialPdfUri: Uri?) {
+private fun SmartControlCenter(activity: MainActivity, initialText: String, initialPdfUri: Uri?) {
     val context = LocalContext.current
-    val activity = context as MainActivity
     val prefs = remember { context.getSharedPreferences("smart_control_center", MODE_PRIVATE) }
     var section by remember { mutableStateOf("الرئيسية") }
     var bridge by remember { mutableStateOf(prefs.getString("bridge", "http://127.0.0.1:8765") ?: "http://127.0.0.1:8765") }
