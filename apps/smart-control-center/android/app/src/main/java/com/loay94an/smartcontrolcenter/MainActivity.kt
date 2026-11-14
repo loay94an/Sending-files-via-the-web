@@ -39,12 +39,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val incoming = intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString().orEmpty()
-        setContent { MaterialTheme { SmartControlCenter(initialText = incoming) } }
+        @Suppress("DEPRECATION")
+        val incomingUri = intent?.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+        setContent { MaterialTheme { SmartControlCenter(initialText = incoming, initialPdfUri = incomingUri) } }
     }
 }
 
 @Composable
-private fun SmartControlCenter(initialText: String) {
+private fun SmartControlCenter(initialText: String, initialPdfUri: Uri?) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("smart_control_center", MODE_PRIVATE) }
     var section by remember { mutableStateOf("الرئيسية") }
@@ -137,6 +139,14 @@ private fun SmartControlCenter(initialText: String) {
             val result = uploadPdf(uri)
             pdfPath = result.optString("path")
             "تم استيراد PDF بالتدفق المباشر إلى مساحة Termux\nالمسار: $pdfPath"
+        }
+    }
+    LaunchedEffect(initialPdfUri) {
+        val uri = initialPdfUri
+        if (uri != null) launchTask {
+            val result = uploadPdf(uri)
+            pdfPath = result.optString("path")
+            "تم استيراد PDF المستلم بالمشاركة إلى مساحة Termux\nالمسار: $pdfPath"
         }
     }
 
