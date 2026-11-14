@@ -6,6 +6,7 @@ on:
     paths:
       - 'apps/smart-control-center/**'
       - '.github/workflows/smart-control-center-android.yml'
+permissions:
   contents: read
 jobs:
   build:
