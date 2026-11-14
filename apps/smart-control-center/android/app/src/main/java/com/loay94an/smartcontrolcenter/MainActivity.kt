@@ -167,7 +167,7 @@ private fun SmartControlCenter(initialText: String) {
                         Text("استخدم Poppler لتحويل الصفحات المصورة إلى صور، ثم Tesseract للتعرف على العربية والإنجليزية.")
                         OutlinedButton(enabled = !busy && token.isNotBlank() && pdfPath.isNotBlank(), onClick = { launchTask {
                             val safe = pdfPath.replace("'", "'\\''")
-                            val cmd = "mkdir -p ocr && pdftoppm -r 250 -png '$safe' ocr/page && for f in ocr/page-*.png; do [ -f "\$f" ] || continue; echo "--- \$f ---"; tesseract "\$f" stdout -l ara+eng 2>/dev/null; done"
+                            val cmd = "mkdir -p ocr && pdftoppm -r 250 -png '$safe' ocr/page && for f in ocr/page-*.png; do [ -f \"\$f\" ] || continue; echo \"--- \$f ---\"; tesseract \"\$f\" stdout -l ara+eng 2>/dev/null; done"
                             val result = JSONObject(call("/api/exec", "POST", JSONObject().put("command", cmd).put("cwd", ".").toString()))
                             result.optString("stdout") + "\n" + result.optString("stderr")
                         } }) { Text("تشغيل OCR عربي + إنجليزي") }
