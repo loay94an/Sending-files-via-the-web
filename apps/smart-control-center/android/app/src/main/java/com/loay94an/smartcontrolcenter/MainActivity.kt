@@ -272,7 +272,48 @@ private fun SmartControlCenter(initialText: String) {
 }
 
 @Composable
-private object SecureTokenStore {\n    private const val alias = "smart_control_center_bridge_token"\n    fun read(prefs: android.content.SharedPreferences): String = try {\n        val stored = prefs.getString("token_encrypted", null) ?: return ""\n        val parts = stored.split(":")\n        val cipher = Cipher.getInstance("AES/GCM/NoPadding")\n        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)))\n        String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), StandardCharsets.UTF_8)\n    } catch (_: Exception) { "" }\n    fun write(prefs: android.content.SharedPreferences, value: String) {\n        if (value.isBlank()) { prefs.edit().remove("token_encrypted").apply(); return }\n        val cipher = Cipher.getInstance("AES/GCM/NoPadding")\n        cipher.init(Cipher.ENCRYPT_MODE, key())\n        val encrypted = cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8))\n        val stored = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(encrypted, Base64.NO_WRAP)\n        prefs.edit().putString("token_encrypted", stored).remove("token").apply()\n    }\n    private fun key(): SecretKey {\n        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }\n        (store.getKey(alias, null) as? SecretKey)?.let { return it }\n        val generator = KeyGenerator.getInstance("AES", "AndroidKeyStore")\n        generator.init(android.security.keystore.KeyGenParameterSpec.Builder(alias, android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT)\n            .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)\n            .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)\n            .setRandomizedEncryptionRequired(true).build())\n        return generator.generateKey()\n    }\n}\n\n@Composable\nprivate fun SelectionContainerCompat(value: String) {
+private object SecureTokenStore {
+    private const val alias = "smart_control_center_bridge_token"
+
+    fun read(prefs: android.content.SharedPreferences): String = try {
+        val stored = prefs.getString("token_encrypted", null) ?: return ""
+        val parts = stored.split(":")
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)))
+        String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), StandardCharsets.UTF_8)
+    } catch (_: Exception) { "" }
+
+    fun write(prefs: android.content.SharedPreferences, value: String) {
+        if (value.isBlank()) {
+            prefs.edit().remove("token_encrypted").remove("token").apply()
+            return
+        }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key())
+        val encrypted = cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8))
+        val stored = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
+            Base64.encodeToString(encrypted, Base64.NO_WRAP)
+        prefs.edit().putString("token_encrypted", stored).remove("token").apply()
+    }
+
+    private fun key(): SecretKey {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (store.getKey(alias, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance("AES", "AndroidKeyStore")
+        generator.init(android.security.keystore.KeyGenParameterSpec.Builder(
+            alias,
+            android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or
+                android.security.keystore.KeyProperties.PURPOSE_DECRYPT
+        ).setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setRandomizedEncryptionRequired(true)
+            .build())
+        return generator.generateKey()
+    }
+}
+
+@Composable
+private fun SelectionContainerCompat(value: String) {
     Text(value, style = MaterialTheme.typography.bodyMedium)
 }
 
