@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -115,7 +116,7 @@ private fun SmartControlCenter(initialText: String) {
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 14.dp)) {
-            Row(Modifier.fillMaxWidth().horizontalScrollCompat(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 sections.forEach { item ->
                     FilterChip(selected = section == item, onClick = { section = item }, label = { Text(item) })
                 }
@@ -269,5 +270,4 @@ private fun SelectionContainerCompat(value: String) {
     Text(value, style = MaterialTheme.typography.bodyMedium)
 }
 
-private fun Modifier.horizontalScrollCompat(): Modifier = this
 private const val MODE_PRIVATE = 0
