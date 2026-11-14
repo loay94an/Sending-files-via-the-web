@@ -246,7 +246,7 @@ private fun SmartControlCenter(initialText: String, initialPdfUri: Uri?) {
                         Text("المسار في مساحة Termux: ${pdfPath.ifBlank { "لم يتم استيراد ملف بعد" }}")
                         OutlinedButton(enabled = !busy && pdfPath.isNotBlank() && token.isNotBlank(), onClick = { launchTask {
                             val safe = pdfPath.replace("'", "'\\''")
-                            val cmd = "pages=$(pdfinfo '$safe' | awk '/Pages:/ {print $2}'); for p in $(seq 1 \"\$pages\"); do echo \"=== PAGE \$p ===\"; pdftotext -f \"\$p\" -l \"\$p\" -layout '$safe' -; done"
+                            val cmd = "pages=\$(pdfinfo '$safe' | awk '/Pages:/ {print \$2}'); for p in \$(seq 1 \"\$pages\"); do echo \"=== PAGE \$p ===\"; pdftotext -f \"\$p\" -l \"\$p\" -layout '$safe' -; done"
                             val result = JSONObject(call("/api/exec", "POST", JSONObject().put("command", cmd).put("cwd", ".").toString()))
                             extracted = result.optString("stdout")
                             "اكتمل استخراج النص. رمز الخروج: ${result.optInt("exitCode")}\n\n${extracted.take(12000)}"
