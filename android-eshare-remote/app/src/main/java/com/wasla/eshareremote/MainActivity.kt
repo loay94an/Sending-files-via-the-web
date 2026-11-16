@@ -34,6 +34,7 @@ class MainActivity : Activity() {
     private var gyroSensor: Sensor? = null
     private var airMouseEnabled = false
     private var lastGyroTimestamp = 0L
+    @Volatile private var lastAirSendAt = 0L
     private val gyroSensitivity = 1.8f
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
@@ -458,6 +459,9 @@ class MainActivity : Activity() {
     }
 
     private fun sendAirMouse(dx: Float, dy: Float) {
+        val now = System.currentTimeMillis()
+        if (now - lastAirSendAt < 55L) return
+        lastAirSendAt = now
         io.execute {
             try {
                 if (tcp?.isConnected != true || tcp?.isClosed != false) {
