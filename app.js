@@ -185,7 +185,7 @@ async function startLocalJoin(raw){
  localMode=true;$('localJoin').disabled=true;localState(lang==='ar'?'جارٍ الاتصال بالطرف الآخر…':'Connecting to the other device…');
  try{const x=await makePeer();peer=x.p;const conn=peer.connect(id,{reliable:true,serialization:'binary',metadata:{name:deviceName(),kind:deviceLabel()}});activeConnection=conn;
   conn.on('open',async()=>{if(!(await verifyLocalConnection(conn))){toast(lang==='ar'?'لم يتم اختيار مسار محلي مباشر؛ أُغلق الاتصال لمنع نقل الملفات عبر الإنترنت.':'No direct LAN route was selected; closed to prevent internet file transfer.');conn.close();return}
-   $('receiveState').textContent=lang==='ar'?'متصل مباشرة عبر الشبكة المحلية':'Connected directly over local network';$('receiveState').classList.add('online');$('joinSession').disabled=true;$('stopReceiver').classList.remove('hidden');$('localPairArea').classList.add('hidden');
+   $('receiveState').textContent=lang==='ar'?'متصل مباشرة عبر الشبكة المحلية':'Connected directly over local network';$('receiveState').classList.add('online');$('joinSession').disabled=true;$('stopReceiver').classList.remove('hidden');$('localStop').classList.remove('hidden');$('localPairArea').classList.add('hidden');
    localState(lang==='ar'?'اتصال محلي مباشر جاهز':'Direct local connection ready',true);toast(lang==='ar'?'تم الاقتران؛ يمكنك الآن فصل الإنترنت ونقل الملفات عبر Wi-Fi.':'Paired; you can now disconnect internet and transfer over Wi-Fi.');
   });
   conn.on('data',handleIncoming);
