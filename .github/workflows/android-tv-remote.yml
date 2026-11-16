@@ -30,6 +30,9 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Apply Arabic UI and D-pad fix
+        run: python3 android-tv-remote/patch_source.py
+
       - name: Build APK
         working-directory: android-tv-remote/source
         run: |
@@ -39,7 +42,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: android-tv-remote-debug-apk
+          name: android-tv-remote-arabic-debug-apk
           path: android-tv-remote/source/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
