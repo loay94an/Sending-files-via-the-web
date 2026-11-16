@@ -1,0 +1,3 @@
+[submodule "android-tv-remote/source"]
+	path = android-tv-remote/source
+	url = https://github.com/deekshith0509/TvToolsPro.git
