@@ -3,6 +3,8 @@ package com.wasla.eshareremote
 import android.app.Activity
 import android.os.Bundle
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.graphics.Typeface
 import android.view.Gravity
@@ -31,6 +33,13 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         window.statusBarColor = 0xff102a43.toInt()
         window.navigationBarColor = 0xff102a43.toInt()
+        val isAndroidTv = packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+            packageManager.hasSystemFeature("android.hardware.type.television")
+        if (isAndroidTv) {
+            startActivity(Intent(this, TvNetworkSetupActivity::class.java))
+            finish()
+            return
+        }
         buildUi()
         val saved = prefs.getString("ip", "") ?: ""
         ipInput.setText(saved)
