@@ -27,6 +27,10 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
+    private val airMouseLock = Any()
+    private var pendingAirDx = 0f
+    private var pendingAirDy = 0f
+    private var airMouseWriteQueued = false
     private var tcp: Socket? = null
     private var output: OutputStream? = null
     private var discoveryLock: WifiManager.MulticastLock? = null
@@ -142,6 +146,23 @@ class MainActivity : Activity() {
         header.addView(power, LinearLayout.LayoutParams(dp(72), dp(58)))
         root.addView(header, lp(-1, dp(72)))
 
+        val shortcuts = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
+        val castButton = makeButton("▣  مشاركة الشاشة", 48, true).apply {
+            textSize = 13f
+            setOnClickListener { openScreenShareSettings() }
+        }
+        shortcuts.addView(castButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(5) })
+        val filesButton = makeButton("⇧  نقل الملفات", 48).apply {
+            textSize = 13f
+            setOnClickListener { pickFileForTv() }
+        }
+        shortcuts.addView(filesButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(5) })
+        root.addView(shortcuts, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(7); bottomMargin = dp(3) })
+
         // Keep manual IP connection available without letting it dominate the design.
         val connection = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -195,7 +216,7 @@ class MainActivity : Activity() {
                     val dy = event.y - downY
                     if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > dp(3)) moved = true
                     if (moved) {
-                        sendAirMouse(dx * 0.55f, dy * 0.55f)
+                        sendAirMouse(dx * 0.82f, dy * 0.82f)
                         downX = event.x; downY = event.y
                     }
                     true
@@ -275,9 +296,9 @@ class MainActivity : Activity() {
                 layoutDirection = View.LAYOUT_DIRECTION_LTR
                 addView(left); addView(center); addView(right)
             }
-        navArea.addView(navRow(navButton(" ", null, 34), navButton("▲", 19, 43), navButton(" ", null, 34)))
+        navArea.addView(navRow(navButton("", null, 34).apply { visibility = View.INVISIBLE }, navButton("▲", 19, 43), navButton("", null, 34).apply { visibility = View.INVISIBLE }))
         navArea.addView(navRow(navButton("◀", 21, 43), navButton("OK", 23, 56, true), navButton("▶", 22, 43)))
-        navArea.addView(navRow(navButton(" ", null, 34), navButton("▼", 20, 43), navButton(" ", null, 34)))
+        navArea.addView(navRow(navButton("", null, 34).apply { visibility = View.INVISIBLE }, navButton("▼", 20, 43), navButton("", null, 34).apply { visibility = View.INVISIBLE }))
         deck.addView(navArea, LinearLayout.LayoutParams(0, dp(165), 1f).apply {
             marginStart = dp(2); marginEnd = dp(2)
         })
@@ -294,10 +315,6 @@ class MainActivity : Activity() {
         deck.addView(volumeStack, LinearLayout.LayoutParams(dp(78), dp(165)).apply {
             marginStart = dp(7)
         })
-        root.addView(deck, LinearLayout.LayoutParams(-1, dp(174)).apply {
-            bottomMargin = dp(12)
-        })
-
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -332,13 +349,26 @@ class MainActivity : Activity() {
             }
         }
         bottom.addView(airToggle, LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginStart = dp(5) })
-        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(3) })
+        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(5); bottomMargin = dp(5) })
+        root.addView(deck, LinearLayout.LayoutParams(-1, dp(174)).apply { topMargin = dp(3) })
 
         setContentView(root)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 702 && resultCode == RESULT_OK) {
+            val uri = data?.data ?: return
+            val share = Intent(Intent.ACTION_SEND).apply {
+                type = contentResolver.getType(uri) ?: "*/*"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                clipData = android.content.ClipData.newUri(contentResolver, "ملف للتلفاز", uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(share, "إرسال الملف إلى تطبيق على التلفاز"))
+            setStatus("اختر تطبيق استقبال الملفات على التلفاز إن كان مثبتاً")
+            return
+        }
         if (requestCode != 701 || resultCode != RESULT_OK) return
         val spoken = data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
             ?.firstOrNull()?.trim()?.lowercase(java.util.Locale("ar")) ?: return
@@ -356,6 +386,27 @@ class MainActivity : Activity() {
             spoken.contains("طاقة") || spoken.contains("إيقاف") -> sendKey(26)
             else -> setStatus("لم أفهم الأمر: $spoken")
         }
+    }
+
+    private fun openScreenShareSettings() {
+        for (action in listOf("android.settings.CAST_SETTINGS", "android.settings.WIFI_DISPLAY_SETTINGS")) {
+            try {
+                startActivity(Intent(action))
+                setStatus("اختر التلفاز من قائمة الإرسال لبدء مشاركة الشاشة")
+                return
+            } catch (_: Exception) { }
+        }
+        Toast.makeText(this, "مشاركة الشاشة غير متاحة من إعدادات هذا الهاتف", Toast.LENGTH_LONG).show()
+    }
+
+    private fun pickFileForTv() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
+        try { startActivityForResult(intent, 702) }
+        catch (_: Exception) { Toast.makeText(this, "تعذر فتح مدير الملفات", Toast.LENGTH_LONG).show() }
     }
 
     private fun addSectionLabel(parent: LinearLayout, label: String) {
@@ -635,22 +686,43 @@ class MainActivity : Activity() {
     }
 
     private fun sendAirMouse(dx: Float, dy: Float) {
-        val now = System.currentTimeMillis()
-        if (now - lastAirSendAt < 35L) return
-        lastAirSendAt = now
-        io.execute {
-            try {
-                if (tcp?.isConnected != true || tcp?.isClosed != false) {
-                    val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
-                    connect(Device("التلفاز", ip, discoverPort(ip)))
-                }
-                val packet = "AIRMOUSEEVNET\r\n$dx\r\n$dy\r\n2\r\n\r\n"
+        if (dx == 0f && dy == 0f) return
+        synchronized(airMouseLock) {
+            pendingAirDx = (pendingAirDx + dx).coerceIn(-80f, 80f)
+            pendingAirDy = (pendingAirDy + dy).coerceIn(-80f, 80f)
+            if (airMouseWriteQueued) return
+            airMouseWriteQueued = true
+        }
+        // Merge rapid sensor/touch events so the executor cannot build a lagging queue.
+        io.execute { drainAirMouseMovement() }
+    }
+
+    private fun drainAirMouseMovement() {
+        try {
+            val delta = synchronized(airMouseLock) {
+                val pair = pendingAirDx to pendingAirDy
+                pendingAirDx = 0f
+                pendingAirDy = 0f
+                pair
+            }
+            if (tcp?.isConnected != true || tcp?.isClosed != false) {
+                val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
+                connect(Device("التلفاز", ip, discoverPort(ip)))
+            }
+            if (delta.first != 0f || delta.second != 0f) {
+                val packet = "AIRMOUSEEVNET\\r\\n${delta.first}\\r\\n${delta.second}\\r\\n2\\r\\n\\r\\n"
                 output?.write(packet.toByteArray(Charsets.UTF_8))
                 output?.flush()
-            } catch (e: Exception) {
-                closeConnection()
-                setStatus("تعذر تحريك الماوس: ${e.message ?: "أعد الاتصال"}")
             }
+        } catch (e: Exception) {
+            closeConnection()
+            setStatus("تعذر تحريك الماوس: ${e.message ?: "أعد الاتصال"}")
+        } finally {
+            val again = synchronized(airMouseLock) {
+                if (pendingAirDx != 0f || pendingAirDy != 0f) true
+                else { airMouseWriteQueued = false; false }
+            }
+            if (again) io.execute { drainAirMouseMovement() }
         }
     }
 
