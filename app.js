@@ -22,21 +22,67 @@ async function joinSession(){if(peer&&!peer.destroyed){toast(tr('connected'));re
 let incoming=null,incomingQueue=Promise.resolve(),saveDirectory=null;
 function safeFileName(name){return String(name||'file').replace(/[\\/:*?"<>|\u0000-\u001f]/g,'_').slice(0,180)||'file'}
 async function chooseSaveDirectory(){if(!window.showDirectoryPicker){toast(lang==='ar'?'هذا المتصفح لا يدعم اختيار مجلد مباشر؛ سيُستخدم التخزين المحلي البديل.':'Folder picking is not supported here; local storage fallback will be used.');return}try{saveDirectory=await window.showDirectoryPicker({mode:'readwrite'});$('storageStatus').textContent=lang==='ar'?'الحفظ المباشر في المجلد المختار':'Saving directly to selected folder';toast(lang==='ar'?'تم اختيار مجلد الحفظ.':'Save folder selected.')}catch(e){if(e.name!=='AbortError')toast(lang==='ar'?'تعذر اختيار المجلد.':'Could not select folder.')}}
+let chunkDbPromise=null;
+function openChunkDb(){
+ if(!('indexedDB'in window))return Promise.reject(Error('NO_LOCAL_STORAGE'));
+ if(!chunkDbPromise)chunkDbPromise=new Promise((resolve,reject)=>{
+  const req=indexedDB.open('wasla-receive-cache',1);
+  req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains('chunks'))db.createObjectStore('chunks',{keyPath:['fileId','index']})};
+  req.onsuccess=()=>resolve(req.result);
+  req.onerror=()=>reject(req.error||Error('IDB_OPEN_FAILED'));
+ });
+ return chunkDbPromise;
+}
+function idbRange(fileId){return IDBKeyRange.bound([fileId,0],[fileId,Number.MAX_SAFE_INTEGER])}
+async function deleteStoredChunks(db,fileId){
+ await new Promise((resolve,reject)=>{
+  const tx=db.transaction('chunks','readwrite'),store=tx.objectStore('chunks'),req=store.openCursor(idbRange(fileId));
+  req.onsuccess=()=>{const cursor=req.result;if(cursor){cursor.delete();cursor.continue()}};
+  tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||Error('IDB_DELETE_FAILED'));tx.onabort=()=>reject(tx.error||Error('IDB_DELETE_FAILED'));
+ });
+}
+async function createIndexedDbTarget(name,mime){
+ const db=await openChunkDb(),fileId=(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random()),state={index:0};
+ const writer={
+  write:part=>new Promise((resolve,reject)=>{
+   let tx;try{tx=db.transaction('chunks','readwrite');tx.objectStore('chunks').put({fileId,index:state.index++,data:part})}catch(e){reject(e);return}
+   tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||Error('IDB_WRITE_FAILED'));tx.onabort=()=>reject(tx.error||Error('IDB_WRITE_FAILED'));
+  }),
+  close:async()=>{},
+  abort:()=>deleteStoredChunks(db,fileId)
+ };
+ const handle={
+  getFile:async()=>{
+   const records=await new Promise((resolve,reject)=>{
+    const tx=db.transaction('chunks','readonly'),req=tx.objectStore('chunks').getAll(idbRange(fileId));
+    req.onsuccess=()=>resolve(req.result||[]);req.onerror=()=>reject(req.error||Error('IDB_READ_FAILED'));
+   });
+   records.sort((a,b)=>a.index-b.index);
+   return new Blob(records.map(x=>x.data),{type:mime||'application/octet-stream'});
+  },
+  cleanup:()=>deleteStoredChunks(db,fileId)
+ };
+ return{writer,handle,kind:'indexeddb',name};
+}
 async function createIncomingTarget(meta){
  const name=safeFileName(meta.name);
  if(saveDirectory){
   let target=name,n=1;
-  while(true){try{await saveDirectory.getFileHandle(target);target=name.replace(/(\.[^.]+)?$/,(_,ext)=>(ext||'')+' ('+(n++)+')')}catch(e){if(e.name==='NotFoundError')break;throw e}}
+  while(true){try{await saveDirectory.getFileHandle(target);target=name.replace(/(\\.[^.]+)?$/,(_,ext)=>(ext||'')+' ('+(n++)+')')}catch(e){if(e.name==='NotFoundError')break;throw e}}
   const handle=await saveDirectory.getFileHandle(target,{create:true});
   return{writer:await handle.createWritable(),handle,kind:'device',name:target};
  }
- if(!navigator.storage||!navigator.storage.getDirectory)throw Error('NO_LOCAL_STORAGE');
- try{if(navigator.storage.persist)await navigator.storage.persist()}catch(e){}
- if(navigator.storage.estimate){const estimate=await navigator.storage.estimate();const free=(estimate.quota||0)-(estimate.usage||0);if(Number.isFinite(free)&&free<meta.size)throw Error('NO_SPACE')}
- const root=await navigator.storage.getDirectory();
- const internalName='wasla-'+(crypto.randomUUID?crypto.randomUUID():Date.now())+'.part';
- const handle=await root.getFileHandle(internalName,{create:true});
- return{writer:await handle.createWritable(),handle,kind:'opfs',name};
+ if(navigator.storage&&navigator.storage.getDirectory){
+  try{
+   if(navigator.storage.persist)await navigator.storage.persist();
+   if(navigator.storage.estimate){const estimate=await navigator.storage.estimate();const free=(estimate.quota||0)-(estimate.usage||0);if(Number.isFinite(free)&&free<meta.size)throw Error('NO_SPACE')}
+   const root=await navigator.storage.getDirectory();
+   const internalName='wasla-'+(crypto.randomUUID?crypto.randomUUID():Date.now())+'.part';
+   const handle=await root.getFileHandle(internalName,{create:true});
+   return{writer:await handle.createWritable(),handle,kind:'opfs',name};
+  }catch(e){if(e.message==='NO_SPACE')throw e;console.warn('OPFS unavailable; using IndexedDB fallback',e)}
+ }
+ return createIndexedDbTarget(name,meta.mime);
 }
 async function processIncoming(data){
  if(data instanceof Blob)data=await data.arrayBuffer();
@@ -49,7 +95,7 @@ async function processIncoming(data){
    const target=await createIncomingTarget(meta);
    incoming={...meta,...target,received:0};
    $('receiveProgress').classList.remove('hidden');$('receiveStatus').textContent=meta.name;$('receivePercent').textContent='0%';$('receiveBar').style.width='0%';
-   $('storageStatus').textContent=target.kind==='device'?(lang==='ar'?'يُكتب مباشرة في مجلد الهاتف':'Writing directly to device folder'):(lang==='ar'?'يُكتب تدريجيًا في التخزين المحلي للموقع':'Writing incrementally to local site storage');
+   $('storageStatus').textContent=target.kind==='device'?(lang==='ar'?'يُكتب مباشرة في مجلد الهاتف':'Writing directly to device folder'):target.kind==='indexeddb'?(lang==='ar'?'يُحفظ تدريجيًا في قاعدة بيانات المتصفح، ثم يظهر رابط التنزيل بعد اكتمال الملف':'Saved incrementally in browser storage; a download link appears when complete'):(lang==='ar'?'يُكتب تدريجيًا في التخزين المحلي للموقع':'Writing incrementally to local site storage');
   }else if(m.type==='file-end'&&incoming&&m.id===incoming.id){
    if(incoming.received!==incoming.size)throw Error('SIZE_MISMATCH');
    const done=incoming;incoming=null;
@@ -61,7 +107,7 @@ async function processIncoming(data){
    const name=document.createElement('strong');name.textContent=done.name;
    const size=document.createElement('small');size.textContent=fmt(done.size)+(done.kind==='device'?(lang==='ar'?' · حُفظ في المجلد المختار':' · Saved in selected folder'):(lang==='ar'?' · محفوظ محليًا':' · Saved locally'));
    info.append(name,size);item.append(sym,info);
-   if(done.kind==='opfs'){const url=URL.createObjectURL(file);const a=document.createElement('a');a.href=url;a.download=done.name;a.className='download-link';a.textContent='⬇ '+(lang==='ar'?'تنزيل':'Download');item.append(a)}
+   if(done.kind==='opfs'||done.kind==='indexeddb'){const url=URL.createObjectURL(file);const a=document.createElement('a');a.href=url;a.download=done.name;a.className='download-link';a.textContent='⬇ '+(lang==='ar'?'تنزيل':'Download');if(done.kind==='indexeddb')a.addEventListener('click',()=>setTimeout(()=>{URL.revokeObjectURL(url);done.handle.cleanup().catch(console.warn)},60000),{once:true});item.append(a)}
    $('receivedList').prepend(item);$('receivePercent').textContent='100%';$('receiveBar').style.width='100%';toast(tr('received'));
   }
   return;
@@ -77,8 +123,8 @@ async function processIncoming(data){
  }
 }
 function handleIncoming(data){incomingQueue=incomingQueue.then(()=>processIncoming(data)).catch(async e=>{console.error('Receive/storage error',e);if(incoming)await closePartial();const msg=e.message==='NO_SPACE'?(lang==='ar'?'مساحة التخزين غير كافية على الجهاز.':'Not enough device storage.'):(lang==='ar'?'تعذرت الكتابة إلى التخزين. تحقق من المساحة والصلاحيات.':'Could not write to storage. Check space and permissions.');$('receiveStatus').textContent=msg;toast(msg);if(activeConnection)activeConnection.close()})}
-async function closePartial(){if(!incoming)return;const partial=incoming;incoming=null;try{await partial.writer.close()}catch(e){try{await partial.writer.abort()}catch(_){}}
- $('receiveStatus').textContent=lang==='ar'?'انقطع النقل؛ تُرك الملف الجزئي في التخزين':'Transfer interrupted; partial file kept in storage';
+async function closePartial(){if(!incoming)return;const partial=incoming;incoming=null;try{if(partial.writer.abort)await partial.writer.abort();else await partial.writer.close()}catch(e){console.warn('Partial file cleanup failed',e)}
+ $('receiveStatus').textContent=lang==='ar'?'انقطع النقل؛ أُوقف حفظ الملف غير المكتمل':'Transfer interrupted; incomplete file was discarded';
 }
 function stopSender(){transferCancelled=true;for(const c of connections.values()){try{c.close()}catch(e){}}connections.clear();if(peer){try{peer.destroy()}catch(e){}}peer=null;sessionId='';$('shareArea').classList.add('hidden');$('sendFilesArea').classList.add('hidden');$('stopSender').classList.add('hidden');$('createSession').classList.remove('hidden');setSessionState(tr('notReady'));renderPeers();toast(tr('stopped'))}
 function stopReceiver(){transferCancelled=true;closePartial();if(activeConnection){try{activeConnection.close()}catch(e){}activeConnection=null}if(peer){try{peer.destroy()}catch(e){}}peer=null;incoming=null;$('stopReceiver').classList.add('hidden');$('joinSession').disabled=false;$('receiveState').textContent=tr('waiting');$('receiveState').classList.remove('online');toast(tr('stopped'))}
