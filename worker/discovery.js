@@ -12,7 +12,8 @@ export class Discovery {
  constructor(state){this.state=state;this.clients=new Map();}
  async fetch(request){
   const pair=new WebSocketPair(),client=pair[0],server=pair[1];
-  const ip=request.headers.get('CF-Connecting-IP')||'unknown';
+  const ip=request.headers.get('CF-Connecting-IP');
+  if(!ip)return new Response('Client IP unavailable',{status:503});
   const id=crypto.randomUUID();
   const record={id,ip,name:'جهاز',kind:'متصفح',socket:server};
   server.accept();
