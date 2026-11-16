@@ -338,9 +338,15 @@ class MainActivity : Activity() {
             text = label
             textSize = if (primary) 15f else 12f
             isAllCaps = false
-            minHeight = dp(if (primary) 48 else 40)
-            setTextColor(0xfff8fafc.toInt())
-            backgroundTintList = ColorStateList.valueOf(if (primary) 0xff0f766e.toInt() else 0xff263449.toInt())
+            minHeight = dp(if (primary) 48 else 42)
+            setPadding(dp(6), 0, dp(6), 0)
+            setTextColor(if (primary) 0xff061521.toInt() else 0xffeaf2ff.toInt())
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(if (primary) 0xff19c6b4.toInt() else 0xff1d2b43.toInt())
+                cornerRadius = dp(14).toFloat()
+                if (!primary) setStroke(dp(1), 0xff2c3d58.toInt())
+            }
+            stateListAnimator = null
             setOnClickListener { sendKey(key) }
         }
 
