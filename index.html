@@ -16,9 +16,10 @@
 <div class="panel-heading"><div><span class="step">01</span><h2 data-i18n="sendTitle">أنشئ جلسة إرسال</h2></div><span class="pill" id="sessionState" data-i18n="notReady">غير متصل</span></div>
 <p class="muted" data-i18n="sendHint">ابدأ جلسة آمنة مؤقتة، ثم أرسل رابطها إلى الجهاز المستقبل.</p>
 <button id="createSession" class="primary wide" type="button"><span class="button-icon">↗</span><span data-i18n="create">إنشاء جلسة ورابط</span></button>
-<div id="shareArea" class="share-area hidden">
-<label for="shareLink" data-i18n="shareLink">رابط الانضمام</label><div class="copy-row"><input id="shareLink" readonly aria-label="رابط الانضمام"><button id="copyLink" class="secondary" type="button" data-i18n="copy">نسخ</button></div>
+<div id="shareArea" class="share-area wifi-card hidden">
+<div class="wifi-title"><strong>امسح الرمز من الجهاز الآخر</strong><span>رابط اتصال عبر الإنترنت</span></div>
 <div class="share-bottom"><div id="qrCode" class="qr" aria-label="رمز QR"></div><div class="share-code"><span data-i18n="sessionCode">رمز الجلسة</span><strong id="sessionCode">—</strong><button id="copyCode" class="text-button" type="button" data-i18n="copyCode">نسخ الرمز</button></div></div>
+<label for="shareLink" data-i18n="shareLink">رابط الانضمام</label><div class="copy-row"><input id="shareLink" readonly aria-label="رابط الانضمام"><button id="copyLink" class="secondary" type="button" data-i18n="copy">نسخ</button></div>
 </div>
 <div id="sendFilesArea" class="hidden"><button id="stopSender" class="danger wide hidden" type="button" data-i18n="stop">إيقاف الاتصال</button>
 <div class="divider"></div><div class="panel-heading compact"><div><span class="step">02</span><h2 data-i18n="chooseFiles">اختر الملفات</h2></div><span class="muted" id="peerCount">0</span></div>
@@ -50,5 +51,5 @@
 </main>
 <div id="pairRequest" class="pair-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="pairRequestTitle"><div class="pair-dialog"><h2 id="pairRequestTitle">طلب اقتران جديد</h2><p>يريد هذا الجهاز الاتصال بك:</p><strong id="pairRequestName">جهاز آخر</strong><div class="pair-actions"><button id="pairReject" class="secondary" type="button">رفض</button><button id="pairAccept" class="primary" type="button">موافقة</button></div></div></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script><script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script><script src="./app.js?v=26" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script><script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script><script src="./app.js?v=27" defer></script>
 </body></html>
