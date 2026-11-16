@@ -61,104 +61,184 @@ class MainActivity : Activity() {
     }
 
     private fun buildUi() {
+        val bg = 0xff080f1e.toInt()
+        val surface = 0xff111c30.toInt()
+        val accent = 0xff19c6b4.toInt()
+        val muted = 0xff8fa3bd.toInt()
+
+        fun rounded(color: Int, radius: Int = 18, stroke: Int = 0): android.graphics.drawable.GradientDrawable =
+            android.graphics.drawable.GradientDrawable().apply {
+                setColor(color)
+                cornerRadius = dp(radius).toFloat()
+                if (stroke != 0) setStroke(dp(1), stroke)
+            }
+
+        fun label(value: String, size: Float = 13f, color: Int = 0xffe7eef8.toInt(), bold: Boolean = false) =
+            TextView(this).apply {
+                text = value
+                textSize = size
+                setTextColor(color)
+                gravity = Gravity.CENTER_VERTICAL
+                if (bold) typeface = Typeface.DEFAULT_BOLD
+            }
+
+        fun makeButton(value: String, primary: Boolean = false, height: Int = 48): Button =
+            Button(this).apply {
+                text = value
+                textSize = 13f
+                isAllCaps = false
+                minHeight = dp(height)
+                setPadding(dp(8), 0, dp(8), 0)
+                setTextColor(if (primary) 0xff061521.toInt() else 0xffeaf2ff.toInt())
+                background = rounded(if (primary) accent else 0xff1d2b43.toInt(), 15, if (primary) 0 else 0xff2c3d58.toInt())
+                stateListAnimator = null
+            }
+
+        fun section(parent: LinearLayout, name: String, hint: String = "") {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutDirection = View.LAYOUT_DIRECTION_RTL
+            }
+            row.addView(label(name, 14f, 0xfff0f6ff.toInt(), true), LinearLayout.LayoutParams(0, dp(30), 1f))
+            if (hint.isNotEmpty()) row.addView(label(hint, 10f, muted))
+            parent.addView(row, lp(-1, dp(30)))
+        }
+
+        fun card(parent: LinearLayout, content: View, height: Int = -2) {
+            val wrapper = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                background = rounded(surface, 20, 0xff22334d.toInt())
+                addView(content, LinearLayout.LayoutParams(-1, height))
+            }
+            parent.addView(wrapper, LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(10)
+            })
+        }
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            setBackgroundColor(0xff0b1220.toInt())
+            setPadding(dp(16), dp(12), dp(16), dp(18))
+            setBackgroundColor(bg)
         }
+
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
         }
-        val title = TextView(this).apply {
-            text = "وصلة"
-            textSize = 21f
-            setTextColor(0xfff1f5f9.toInt())
-            typeface = Typeface.DEFAULT_BOLD
+        val brand = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
         }
-        header.addView(title, LinearLayout.LayoutParams(0, dp(36), 1f))
+        brand.addView(label("وِصلة", 25f, 0xfff4f8ff.toInt(), true))
+        brand.addView(label("تحكّم أذكى، براحة أكبر", 10f, muted))
+        header.addView(brand, LinearLayout.LayoutParams(0, dp(54), 1f))
+        val mark = TextView(this).apply {
+            text = "W"
+            textSize = 20f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(0xff061521.toInt())
+            background = rounded(accent, 16)
+        }
+        header.addView(mark, LinearLayout.LayoutParams(dp(46), dp(46)))
+        root.addView(header, lp(-1, dp(58)))
+
+        val statusCard = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(dp(12), 0, dp(12), 0)
+            background = rounded(0xff10283a.toInt(), 14, 0xff1d5360.toInt())
+        }
+        val dot = TextView(this).apply {
+            text = "●"
+            textSize = 11f
+            setTextColor(accent)
+        }
+        statusCard.addView(dot, LinearLayout.LayoutParams(dp(18), dp(38)))
         status = TextView(this).apply {
             text = "جارٍ البحث عن التلفاز..."
             textSize = 11f
-            gravity = Gravity.CENTER
-            setTextColor(0xff5eead4.toInt())
+            setTextColor(0xffa9f3e8.toInt())
+            gravity = Gravity.CENTER_VERTICAL
             maxLines = 2
         }
-        header.addView(status, LinearLayout.LayoutParams(0, dp(36), 2f))
-        root.addView(header, lp(-1, dp(36)))
+        statusCard.addView(status, LinearLayout.LayoutParams(0, dp(38), 1f))
+        root.addView(statusCard, lp(-1, dp(40)))
 
+        section(root, "اتصال التلفاز", "على شبكة الهاتف")
         val connection = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
         ipInput = EditText(this).apply {
-            hint = "IP التلفاز"
-            textSize = 13f
+            hint = "192.168.x.x"
+            textSize = 14f
             setSingleLine(true)
             inputType = android.text.InputType.TYPE_CLASS_TEXT
             layoutDirection = View.LAYOUT_DIRECTION_LTR
             setTextColor(0xfff8fafc.toInt())
-            setHintTextColor(0xff94a3b8.toInt())
-            setPadding(dp(8), 0, dp(8), 0)
-            backgroundTintList = ColorStateList.valueOf(0xff475569.toInt())
+            setHintTextColor(muted)
+            setPadding(dp(12), 0, dp(12), 0)
+            background = rounded(0xff0b1527.toInt(), 13, 0xff30415d.toInt())
         }
-        connection.addView(ipInput, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
-        connectButton = Button(this).apply {
-            text = "اتصال"
-            textSize = 12f
-            isAllCaps = false
-            minHeight = dp(40)
-            backgroundTintList = ColorStateList.valueOf(0xff0f766e.toInt())
-            setTextColor(0xffffffff.toInt())
+        connection.addView(ipInput, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
+        connectButton = makeButton("اتصال", true, 48).apply {
             setOnClickListener { discoverAndConnect(ipInput.text.toString().trim().ifEmpty { null }) }
         }
-        connection.addView(connectButton, LinearLayout.LayoutParams(dp(92), dp(42)))
-        root.addView(connection, lp(-1, dp(42)))
+        connection.addView(connectButton, LinearLayout.LayoutParams(dp(92), dp(48)))
+        card(root, connection)
 
-        addSectionLabel(root, "الاتجاهات")
-        val pad = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
+        section(root, "لوحة الاتجاهات", "تنقّل سريع")
+        val pad = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+        }
         pad.addView(buttonRow(" ", "▲", " ", null, 19, null))
         pad.addView(buttonRow("◀", "●", "▶", 21, 23, 22))
         pad.addView(buttonRow(" ", "▼", " ", null, 20, null))
-        root.addView(pad, lp(-1, dp(132)))
+        card(root, pad, dp(148))
 
-        addSectionLabel(root, "الماوس الهوائي")
+        section(root, "الماوس الهوائي", "حرّك الهاتف")
         val airRow = compactRow()
-        val airToggle = Button(this).apply {
-            text = if (gyroSensor == null) "الجيروسكوب غير متاح" else "تشغيل التحريك بالهاتف"
-            textSize = 12f
-            isAllCaps = false
+        val airToggle = makeButton(if (gyroSensor == null) "المستشعر غير متاح" else "تشغيل الماوس الهوائي", true, 48).apply {
             isEnabled = gyroSensor != null
-            backgroundTintList = ColorStateList.valueOf(0xff0f766e.toInt())
-            setTextColor(0xffffffff.toInt())
             setOnClickListener {
                 airMouseEnabled = !airMouseEnabled
-                text = if (airMouseEnabled) "إيقاف التحريك الهوائي" else "تشغيل التحريك بالهاتف"
+                text = if (airMouseEnabled) "إيقاف الماوس الهوائي" else "تشغيل الماوس الهوائي"
                 if (airMouseEnabled) startAirMouse() else stopAirMouse()
-                setStatus(if (airMouseEnabled) "الماوس الهوائي يعمل — حرّك الهاتف" else "تم إيقاف التحريك الهوائي")
+                setStatus(if (airMouseEnabled) "الماوس الهوائي مفعّل — حرّك الهاتف" else "تم إيقاف الماوس الهوائي")
             }
         }
-        airRow.addView(airToggle, LinearLayout.LayoutParams(0, dp(42), 1f))
-        airRow.addView(actionButton("نقرة / اختيار", 23, true), LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(6) })
-        root.addView(airRow, lp(-1, dp(44)))
+        airRow.addView(airToggle, LinearLayout.LayoutParams(0, dp(48), 1.35f).apply { marginEnd = dp(6) })
+        airRow.addView(makeButton("نقرة / اختيار", false, 48).apply { setOnClickListener { sendKey(23) } },
+            LinearLayout.LayoutParams(0, dp(48), 1f))
+        card(root, airRow)
 
-        addSectionLabel(root, "لوحة تحريك الإصبع")
+        section(root, "لوحة اللمس", "اسحب بإصبعك")
         val touchPad = FrameLayout(this).apply {
-            setBackgroundColor(0xff1e293b.toInt())
-            contentDescription = "لوحة لمس التلفاز؛ انقر على موضع الشاشة لإرسال اللمسة"
+            background = rounded(0xff0c1729.toInt(), 18, 0xff30415d.toInt())
+            contentDescription = "لوحة لمس التلفاز"
         }
-        val touchHint = TextView(this).apply {
-            text = "اسحب لتحريك التحديد • انقر للاختيار"
-            textSize = 12f
+        val touchContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setTextColor(0xffcbd5e1.toInt())
         }
-        touchPad.addView(touchHint, FrameLayout.LayoutParams(-1, -1))
-        // EShare Air Mouse event: AIRMOUSEEVNET + relative X/Y + state 2.
+        val touchIcon = TextView(this).apply {
+            text = "✥"
+            textSize = 30f
+            gravity = Gravity.CENTER
+            setTextColor(accent)
+        }
+        touchContent.addView(touchIcon, lp(-1, dp(42)))
+        touchContent.addView(label("منطقة تحريك المؤشر", 12f, 0xffd7e3f3.toInt(), true).apply { gravity = Gravity.CENTER })
+        touchContent.addView(label("اسحب للتحريك  •  انقر للاختيار", 10f, muted).apply { gravity = Gravity.CENTER })
+        touchPad.addView(touchContent, FrameLayout.LayoutParams(-1, -1))
         var lastX = 0f
         var lastY = 0f
         touchPad.setOnTouchListener { view, event ->
@@ -172,52 +252,49 @@ class MainActivity : Activity() {
                     if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > 0.8f) sendAirMouse(dx * 1.25f, dy * 1.25f)
                     true
                 }
-                android.view.MotionEvent.ACTION_UP -> { view.performClick(); true }
+                android.view.MotionEvent.ACTION_UP -> { sendKey(23); view.performClick(); true }
                 android.view.MotionEvent.ACTION_CANCEL -> true
                 else -> true
             }
         }
-        root.addView(touchPad, LinearLayout.LayoutParams(-1, dp(112)).apply { bottomMargin = dp(4) })
+        card(root, touchPad, dp(116))
 
-        addSectionLabel(root, "التحكم السريع")
+        section(root, "التحكم السريع")
         val actions = compactRow()
         actions.addView(actionButton("رجوع", 4), compactWeighted())
         actions.addView(actionButton("الرئيسية", 3), compactWeighted())
         actions.addView(actionButton("القائمة", 82), compactWeighted())
-        root.addView(actions, lp(-1, dp(42)))
+        card(root, actions)
 
+        section(root, "الصوت والوسائط")
         val volume = compactRow()
         volume.addView(actionButton("− صوت", 25), compactWeighted())
         volume.addView(actionButton("كتم", 91), compactWeighted())
         volume.addView(actionButton("+ صوت", 24), compactWeighted())
-        root.addView(volume, lp(-1, dp(42)))
+        card(root, volume)
 
         val media = compactRow()
         media.addView(actionButton("السابق", 88), compactWeighted())
         media.addView(actionButton("▶ / ❚❚", 85, true), compactWeighted())
         media.addView(actionButton("التالي", 87), compactWeighted())
-        root.addView(media, lp(-1, dp(42)))
+        card(root, media)
 
         val system = compactRow()
         system.addView(actionButton("قناة −", 167), compactWeighted())
         system.addView(actionButton("قناة +", 166), compactWeighted())
         system.addView(actionButton("⏻ طاقة", 26), compactWeighted())
-        root.addView(system, lp(-1, dp(42)))
+        card(root, system)
 
-        val refresh = Button(this).apply {
-            text = "إعادة البحث عن التلفاز"
-            textSize = 11f
-            isAllCaps = false
-            minHeight = dp(36)
-            backgroundTintList = ColorStateList.valueOf(0xff263449.toInt())
-            setTextColor(0xffcbd5e1.toInt())
+        val refresh = makeButton("إعادة البحث عن التلفاز", false, 44).apply {
             setOnClickListener { discoverAndConnect() }
         }
-        root.addView(refresh, lp(-1, dp(36)))
+        root.addView(refresh, lp(-1, dp(44)))
+
         setContentView(ScrollView(this).apply {
             isFillViewport = true
+            clipToPadding = false
             addView(root)
-            setBackgroundColor(0xff0b1220.toInt())
+            setBackgroundColor(bg)
         })
     }
 
