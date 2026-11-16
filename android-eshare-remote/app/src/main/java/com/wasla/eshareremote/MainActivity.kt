@@ -788,7 +788,7 @@ class MainActivity : Activity() {
                 connect(Device("التلفاز", ip, discoverPort(ip)))
             }
             if (delta.first != 0f || delta.second != 0f) {
-                val packet = "AIRMOUSEEVNET\r\n${delta.first}\r\n${delta.second}\r\n2\r\n\r\n"
+                val packet = "AIRMOUSEEVNET\\r\\n${delta.first}\\r\\n${delta.second}\\r\\n2\\r\\n\\r\\n"
                 output?.write(packet.toByteArray(Charsets.UTF_8))
                 output?.flush()
             }
