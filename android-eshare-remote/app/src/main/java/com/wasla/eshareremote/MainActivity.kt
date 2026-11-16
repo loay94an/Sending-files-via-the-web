@@ -312,7 +312,7 @@ class MainActivity : Activity() {
                     val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
                     connect(Device("التلفاز", ip, discoverPort(ip)))
                 }
-                val message = "TOUCHLOGNPRESS\r\\n[={$x,$y}]\r\\n\r\\n"
+                val message = "TOUCHLOGNPRESS\r\n[={$x,$y}]\r\n\r\n"
                 output?.write(message.toByteArray(Charsets.UTF_8))
                 output?.flush()
                 setStatus("تم إرسال اللمسة إلى الشاشة: $x, $y")
