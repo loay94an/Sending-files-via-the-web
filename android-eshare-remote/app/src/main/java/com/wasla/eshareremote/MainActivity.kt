@@ -53,63 +53,75 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
-            setPadding(20, 18, 20, 18)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
             setBackgroundColor(0xff0b1220.toInt())
         }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
         val title = TextView(this).apply {
-            text = "وصلة ريموت"
-            textSize = 26f
+            text = "وصلة"
+            textSize = 21f
             setTextColor(0xfff1f5f9.toInt())
             typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
         }
-        root.addView(title, lp(-1, -2))
+        header.addView(title, LinearLayout.LayoutParams(0, dp(36), 1f))
         status = TextView(this).apply {
             text = "جارٍ البحث عن التلفاز..."
-            textSize = 14f
+            textSize = 11f
             gravity = Gravity.CENTER
-            setTextColor(0xff94a3b8.toInt())
-            setPadding(4, 12, 4, 12)
+            setTextColor(0xff5eead4.toInt())
+            maxLines = 2
         }
-        root.addView(status, lp(-1, -2))
-        ipInput = EditText(this).apply {
-            hint = "عنوان IP للتلفاز (مثال: 10.157.171.193)"
-            textSize = 15f
-            setSingleLine(true)
-            inputType =  android.text.InputType.TYPE_CLASS_TEXT
+        header.addView(status, LinearLayout.LayoutParams(0, dp(36), 2f))
+        root.addView(header, lp(-1, dp(36)))
+
+        val connection = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
-        root.addView(ipInput, lp(-1, -2))
+        ipInput = EditText(this).apply {
+            hint = "IP التلفاز"
+            textSize = 13f
+            setSingleLine(true)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            setTextColor(0xfff8fafc.toInt())
+            setHintTextColor(0xff94a3b8.toInt())
+            setPadding(dp(8), 0, dp(8), 0)
+            backgroundTintList = ColorStateList.valueOf(0xff475569.toInt())
+        }
+        connection.addView(ipInput, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
         connectButton = Button(this).apply {
-            text = "اكتشاف / اتصال"
+            text = "اتصال"
+            textSize = 12f
+            isAllCaps = false
+            minHeight = dp(40)
             backgroundTintList = ColorStateList.valueOf(0xff0f766e.toInt())
             setTextColor(0xffffffff.toInt())
             setOnClickListener { discoverAndConnect(ipInput.text.toString().trim().ifEmpty { null }) }
         }
-        root.addView(connectButton, lp(-1, -2))
+        connection.addView(connectButton, LinearLayout.LayoutParams(dp(92), dp(42)))
+        root.addView(connection, lp(-1, dp(42)))
 
+        addSectionLabel(root, "الاتجاهات")
         val pad = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
         pad.addView(buttonRow(" ", "▲", " ", null, 19, null))
         pad.addView(buttonRow("◀", "●", "▶", 21, 23, 22))
         pad.addView(buttonRow(" ", "▼", " ", null, 20, null))
-        root.addView(pad, lp(-1, -2))
+        root.addView(pad, lp(-1, dp(132)))
 
-        val touchTitle = TextView(this).apply {
-            text = "التحكم باللمس والماوس"
-            textSize = 18f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(0xff102a43.toInt())
-            setPadding(0, dp(14), 0, dp(6))
-        }
-        root.addView(touchTitle, lp(-1, -2))
+        addSectionLabel(root, "لوحة اللمس")
         val touchPad = FrameLayout(this).apply {
             setBackgroundColor(0xff1e293b.toInt())
             contentDescription = "لوحة لمس التلفاز؛ انقر على موضع الشاشة لإرسال اللمسة"
         }
         val touchHint = TextView(this).apply {
-            text = "المس هنا لتحديد موضع النقر على شاشة التلفاز"
-            textSize = 15f
+            text = "المس هنا للتحكم بمؤشر التلفاز"
+            textSize = 12f
             gravity = Gravity.CENTER
             setTextColor(0xffcbd5e1.toInt())
         }
@@ -122,40 +134,70 @@ class MainActivity : Activity() {
             }
             true
         }
-        root.addView(touchPad, LinearLayout.LayoutParams(-1, dp(190)).apply { bottomMargin = dp(8) })
+        root.addView(touchPad, LinearLayout.LayoutParams(-1, dp(112)).apply { bottomMargin = dp(4) })
 
-        val actions = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
-        actions.addView(actionButton("رجوع", 4), weighted())
-        actions.addView(actionButton("الرئيسية", 3), weighted())
-        actions.addView(actionButton("القائمة", 82), weighted())
-        root.addView(actions, lp(-1, -2))
+        addSectionLabel(root, "التحكم السريع")
+        val actions = compactRow()
+        actions.addView(actionButton("رجوع", 4), compactWeighted())
+        actions.addView(actionButton("الرئيسية", 3), compactWeighted())
+        actions.addView(actionButton("القائمة", 82), compactWeighted())
+        root.addView(actions, lp(-1, dp(42)))
 
-        val volume = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
-        volume.addView(actionButton("الصوت −", 25), weighted())
-        volume.addView(actionButton("كتم", 91), weighted())
-        volume.addView(actionButton("الصوت +", 24), weighted())
-        root.addView(volume, lp(-1, -2))
+        val volume = compactRow()
+        volume.addView(actionButton("− صوت", 25), compactWeighted())
+        volume.addView(actionButton("كتم", 91), compactWeighted())
+        volume.addView(actionButton("+ صوت", 24), compactWeighted())
+        root.addView(volume, lp(-1, dp(42)))
 
-        val media = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
-        media.addView(actionButton("السابق", 88), weighted())
-        media.addView(actionButton("تشغيل / إيقاف", 85, true), weighted())
-        media.addView(actionButton("التالي", 87), weighted())
-        root.addView(media, lp(-1, -2))
+        val media = compactRow()
+        media.addView(actionButton("السابق", 88), compactWeighted())
+        media.addView(actionButton("▶ / ❚❚", 85, true), compactWeighted())
+        media.addView(actionButton("التالي", 87), compactWeighted())
+        root.addView(media, lp(-1, dp(42)))
 
-        val system = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
-        system.addView(actionButton("القناة −", 167), weighted())
-        system.addView(actionButton("القناة +", 166), weighted())
-        system.addView(actionButton("طاقة", 26), weighted())
-        root.addView(system, lp(-1, -2))
+        val system = compactRow()
+        system.addView(actionButton("قناة −", 167), compactWeighted())
+        system.addView(actionButton("قناة +", 166), compactWeighted())
+        system.addView(actionButton("⏻ طاقة", 26), compactWeighted())
+        root.addView(system, lp(-1, dp(42)))
 
         val refresh = Button(this).apply {
-            text = "إعادة البحث"
-            backgroundTintList = ColorStateList.valueOf(0xff0f766e.toInt())
-            setTextColor(0xffffffff.toInt())
+            text = "إعادة البحث عن التلفاز"
+            textSize = 11f
+            isAllCaps = false
+            minHeight = dp(36)
+            backgroundTintList = ColorStateList.valueOf(0xff263449.toInt())
+            setTextColor(0xffcbd5e1.toInt())
             setOnClickListener { discoverAndConnect() }
         }
-        root.addView(refresh, lp(-1, -2))
-        setContentView(ScrollView(this).apply { addView(root) })
+        root.addView(refresh, lp(-1, dp(36)))
+        setContentView(ScrollView(this).apply {
+            isFillViewport = true
+            addView(root)
+            setBackgroundColor(0xff0b1220.toInt())
+        })
+    }
+
+    private fun addSectionLabel(parent: LinearLayout, label: String) {
+        val view = TextView(this).apply {
+            text = label
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(0xff5eead4.toInt())
+            gravity = Gravity.CENTER
+            setPadding(0, dp(3), 0, dp(1))
+        }
+        parent.addView(view, lp(-1, dp(22)))
+    }
+
+    private fun compactRow() = LinearLayout(this).apply {
+        gravity = Gravity.CENTER
+        orientation = LinearLayout.HORIZONTAL
+        layoutDirection = View.LAYOUT_DIRECTION_LTR
+    }
+
+    private fun compactWeighted() = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
+        setMargins(dp(2), dp(1), dp(2), dp(1))
     }
 
     private fun buttonRow(left: String, middle: String, right: String, leftKey: Int?, midKey: Int, rightKey: Int?): LinearLayout {
@@ -170,20 +212,20 @@ class MainActivity : Activity() {
         return row
     }
 
-    private fun spacer(): View = View(this).apply { minimumHeight = dp(58) }
+    private fun spacer(): View = View(this).apply { minimumHeight = dp(40) }
     private fun actionButton(label: String, key: Int, primary: Boolean = false): Button =
         Button(this).apply {
             text = label
-            textSize = if (primary) 17f else 14f
+            textSize = if (primary) 15f else 12f
             isAllCaps = false
-            minHeight = dp(if (primary) 68 else 54)
+            minHeight = dp(if (primary) 48 else 40)
             setTextColor(0xfff8fafc.toInt())
             backgroundTintList = ColorStateList.valueOf(if (primary) 0xff0f766e.toInt() else 0xff263449.toInt())
             setOnClickListener { sendKey(key) }
         }
 
-    private fun lp(w: Int, h: Int) = LinearLayout.LayoutParams(w, h).apply { bottomMargin = dp(7) }
-    private fun weighted() = LinearLayout.LayoutParams(0, dp(58), 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
+    private fun lp(w: Int, h: Int) = LinearLayout.LayoutParams(w, h).apply { bottomMargin = dp(3) }
+    private fun weighted() = LinearLayout.LayoutParams(0, dp(40), 1f).apply { setMargins(dp(2), dp(1), dp(2), dp(1)) }
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun setStatus(message: String) = runOnUiThread { status.text = message }
