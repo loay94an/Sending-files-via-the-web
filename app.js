@@ -133,7 +133,7 @@ function switchLang(){lang=lang==='ar'?'en':'ar';document.documentElement.lang=l
 
 
 
-let localPairingId='';
+let localPairingId='',localPendingRole='';
 function deviceLabel(){const ua=navigator.userAgent||'';if(/smart-tv|smarttv|tizen|web0s|webos|hbbtv|netcast|googletv|aftb|aftt/i.test(ua))return 'تلفاز';if(/ipad|tablet/i.test(ua))return 'جهاز لوحي';if(/android|iphone|mobile/i.test(ua))return 'هاتف';return 'حاسوب'}
 function deviceName(){return deviceLabel()+' · '+(navigator.platform||'متصفح')}
 function localState(message,online=false){$('discoveryState').textContent=message;$('discoveryState').classList.toggle('online',online)}
@@ -156,12 +156,12 @@ async function createLocalPairing(){
 }
 function showLocalPairRequest(conn){
  if(pendingLocalConnection){try{conn.close()}catch(_){}return}
- pendingLocalConnection=conn;const meta=conn.metadata||{};
+ pendingLocalConnection=conn;localPendingRole='host';const meta=conn.metadata||{};
  $('pairRequestName').textContent=String(meta.name||'جهاز آخر').slice(0,80);
  $('pairRequest').classList.remove('hidden');localState(lang==='ar'?'طلب اقتران جديد؛ بانتظار موافقتك':'Pairing request; awaiting approval');
  conn.on('close',()=>{if(pendingLocalConnection===conn){pendingLocalConnection=null;$('pairRequest').classList.add('hidden');localState(lang==='ar'?'بانتظار جهاز آخر':'Waiting for another device',true)}});
 }
-function approveLocalPair(){const conn=pendingLocalConnection;if(!conn)return;pendingLocalConnection=null;$('pairRequest').classList.add('hidden');attachSenderConnection(conn,true);localState(lang==='ar'?'تمت الموافقة؛ جارٍ إنشاء اتصال محلي':'Accepted; establishing local connection')}
+function approveLocalPair(){const conn=pendingLocalConnection;if(!conn)return;const role=localPendingRole;pendingLocalConnection=null;localPendingRole='';$('pairRequest').classList.add('hidden');if(role==='scanner'){conn._waslaLocalVerified=true;connections.set(conn.peer,conn);activeConnection=conn;renderPeers();activateLocalTransferUI();localState(lang==='ar'?'تمت الموافقة؛ الجهازان متصلان وجاهزان':'Approved; both devices are connected and ready',true);try{conn.send(JSON.stringify({type:'local-ready'}))}catch(e){console.warn('Local approval confirmation failed',e)}toast(lang==='ar'?'تم الاقتران؛ الإرسال والاستقبال متاحان على الجهازين.':'Paired; sending and receiving are ready on both devices.')}else{attachSenderConnection(conn,true);localState(lang==='ar'?'تمت الموافقة؛ جارٍ تأكيد الاتصال المحلي':'Accepted; confirming local connection')}}
 function rejectLocalPair(){const conn=pendingLocalConnection;pendingLocalConnection=null;$('pairRequest').classList.add('hidden');if(conn)try{conn.close()}catch(_){}localState(lang==='ar'?'تم رفض طلب الاقتران':'Pairing request rejected',true)}
 function privateAddress(value){
  const a=String(value||'').toLowerCase();if(!a)return false;
@@ -195,8 +195,8 @@ async function startLocalJoin(raw){
  localMode=true;$('localJoin').disabled=true;localState(lang==='ar'?'جارٍ الاتصال بالطرف الآخر…':'Connecting to the other device…');
  try{const x=await makePeer();peer=x.p;const conn=peer.connect(id,{reliable:true,serialization:'binary',metadata:{name:deviceName(),kind:deviceLabel()}});activeConnection=conn;
   conn.on('open',async()=>{if(!(await verifyLocalConnection(conn))){toast(lang==='ar'?'لم يتم اختيار مسار محلي مباشر؛ أُغلق الاتصال لمنع نقل الملفات عبر الإنترنت.':'No direct LAN route was selected; closed to prevent internet file transfer.');conn.close();return}
-   conn._waslaLocalVerified=true;connections.set(conn.peer,conn);activeConnection=conn;renderPeers();$('receiveState').textContent=lang==='ar'?'متصل مباشرة عبر الشبكة المحلية':'Connected directly over local network';$('receiveState').classList.add('online');$('joinSession').disabled=true;activateLocalTransferUI();localState(lang==='ar'?'اتصال محلي مباشر جاهز؛ بانتظار تأكيد الجهاز الأول':'Direct local connection ready; waiting for first device confirmation',true);try{conn.send(JSON.stringify({type:'local-ready'}))}catch(e){console.warn('Could not confirm local pairing to sender',e)}toast(lang==='ar'?'تم الاتصال المحلي؛ بانتظار موافقة الجهاز الأول.':'Local route ready; waiting for the first device to confirm.');  });
-  conn.on('data',data=>{if(typeof data==='string'){try{const message=JSON.parse(data);if(message.type==='local-status-request'&&conn._waslaLocalVerified){conn.send(JSON.stringify({type:'local-ready'}));return}}catch(_){}}handleIncoming(data)});
+   conn._waslaLocalVerified=true;localPendingRole='scanner';pendingLocalConnection=conn;$('pairRequestName').textContent=lang==='ar'?'الجهاز الذي أنشأ رمز QR':'Device that created the QR code';$('pairRequest').classList.remove('hidden');localState(lang==='ar'?'تم التحقق من الاتصال المحلي؛ بانتظار موافقتك':'Local connection verified; waiting for your approval',true);toast(lang==='ar'?'تحقق الاتصال؛ اضغط موافقة لبدء النقل.':'Connection verified; approve to start transfer.');  });
+  conn.on('data',data=>{let handled=false;if(typeof data==='string'){try{const message=JSON.parse(data);if(message.type==='local-status-request'&&conn._waslaLocalVerified){conn.send(JSON.stringify({type:'local-ready'}));handled=true}else if(message.type==='chunk-ack'&&conn._waslaAckResolve){const resolve=conn._waslaAckResolve;conn._waslaAckResolve=null;resolve();handled=true}else if(message.type==='done'){toast(tr('sent'));handled=true}}catch(_){}}if(!handled)handleIncoming(data)});
   conn.on('close',()=>{if(activeConnection===conn)activeConnection=null;closePartial();$('receiveState').textContent=tr('waiting');$('receiveState').classList.remove('online');$('stopReceiver').classList.add('hidden')});
   conn.on('error',e=>{console.warn('Local receiver connection',e);toast(lang==='ar'?'تعذر إكمال الاتصال المحلي.':'Could not complete local connection.')});
  }catch(e){console.error(e);localState(lang==='ar'?'تعذر الاتصال':'Connection failed');toast(lang==='ar'?'تعذر الاقتران. أبقِ الإنترنت متاحًا أثناء إنشاء الاتصال.':'Pairing failed. Keep internet available while establishing the connection.')}
