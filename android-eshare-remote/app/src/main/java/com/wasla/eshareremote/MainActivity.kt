@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.net.wifi.WifiManager
 import android.graphics.Typeface
 import android.view.Gravity
@@ -31,8 +32,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = 0xff102a43.toInt()
-        window.navigationBarColor = 0xff102a43.toInt()
+        window.statusBarColor = 0xff0b1220.toInt()
+        window.navigationBarColor = 0xff0b1220.toInt()
         val isAndroidTv = packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
             packageManager.hasSystemFeature("android.hardware.type.television")
         if (isAndroidTv) {
@@ -52,12 +53,12 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_HORIZONTAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
             setPadding(20, 18, 20, 18)
-            setBackgroundColor(0xfff3f6fa.toInt())
+            setBackgroundColor(0xff0b1220.toInt())
         }
         val title = TextView(this).apply {
             text = "وصلة ريموت"
             textSize = 26f
-            setTextColor(0xff102a43.toInt())
+            setTextColor(0xfff1f5f9.toInt())
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
         }
@@ -66,7 +67,7 @@ class MainActivity : Activity() {
             text = "جارٍ البحث عن التلفاز..."
             textSize = 14f
             gravity = Gravity.CENTER
-            setTextColor(0xff486581.toInt())
+            setTextColor(0xff94a3b8.toInt())
             setPadding(4, 12, 4, 12)
         }
         root.addView(status, lp(-1, -2))
@@ -80,6 +81,8 @@ class MainActivity : Activity() {
         root.addView(ipInput, lp(-1, -2))
         connectButton = Button(this).apply {
             text = "اكتشاف / اتصال"
+            backgroundTintList = ColorStateList.valueOf(0xff0f766e.toInt())
+            setTextColor(0xffffffff.toInt())
             setOnClickListener { discoverAndConnect(ipInput.text.toString().trim().ifEmpty { null }) }
         }
         root.addView(connectButton, lp(-1, -2))
@@ -100,14 +103,14 @@ class MainActivity : Activity() {
         }
         root.addView(touchTitle, lp(-1, -2))
         val touchPad = FrameLayout(this).apply {
-            setBackgroundColor(0xffdce8f5.toInt())
+            setBackgroundColor(0xff1e293b.toInt())
             contentDescription = "لوحة لمس التلفاز؛ انقر على موضع الشاشة لإرسال اللمسة"
         }
         val touchHint = TextView(this).apply {
             text = "المس هنا لتحديد موضع النقر على شاشة التلفاز"
             textSize = 15f
             gravity = Gravity.CENTER
-            setTextColor(0xff24415f.toInt())
+            setTextColor(0xffcbd5e1.toInt())
         }
         touchPad.addView(touchHint, FrameLayout.LayoutParams(-1, -1))
         touchPad.setOnTouchListener { view, event ->
@@ -131,8 +134,23 @@ class MainActivity : Activity() {
         volume.addView(actionButton("كتم", 91), weighted())
         volume.addView(actionButton("الصوت +", 24), weighted())
         root.addView(volume, lp(-1, -2))
+
+        val media = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
+        media.addView(actionButton("السابق", 88), weighted())
+        media.addView(actionButton("تشغيل / إيقاف", 85, true), weighted())
+        media.addView(actionButton("التالي", 87), weighted())
+        root.addView(media, lp(-1, -2))
+
+        val system = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
+        system.addView(actionButton("القناة −", 167), weighted())
+        system.addView(actionButton("القناة +", 166), weighted())
+        system.addView(actionButton("طاقة", 26), weighted())
+        root.addView(system, lp(-1, -2))
+
         val refresh = Button(this).apply {
             text = "إعادة البحث"
+            backgroundTintList = ColorStateList.valueOf(0xff0f766e.toInt())
+            setTextColor(0xffffffff.toInt())
             setOnClickListener { discoverAndConnect() }
         }
         root.addView(refresh, lp(-1, -2))
@@ -155,9 +173,11 @@ class MainActivity : Activity() {
     private fun actionButton(label: String, key: Int, primary: Boolean = false): Button =
         Button(this).apply {
             text = label
-            textSize = if (primary) 22f else 14f
+            textSize = if (primary) 17f else 14f
             isAllCaps = false
             minHeight = dp(if (primary) 68 else 54)
+            setTextColor(0xfff8fafc.toInt())
+            backgroundTintList = ColorStateList.valueOf(if (primary) 0xff0f766e.toInt() else 0xff263449.toInt())
             setOnClickListener { sendKey(key) }
         }
 
