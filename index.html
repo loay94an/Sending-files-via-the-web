@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#101827"><meta name="description" content="وصلة — نقل الملفات مباشرة بين أجهزتك عبر الإنترنت.">
+<meta name="theme-color" content="#101827"><meta name="description" content="وصلة — نقل الملفات مباشرة بين أجهزتك محليًا وعبر الإنترنت.">
 <title>وصلة | نقل مباشر بين الأجهزة</title>
 <link rel="manifest" href="./manifest.webmanifest"><link rel="icon" href="./icon.svg" type="image/svg+xml"><link rel="stylesheet" href="./styles.css">
 </head>
@@ -11,7 +11,7 @@
 <main class="shell">
 <section class="hero"><div class="eyebrow" data-i18n="eyebrow">نقل بسيط. اتصال مباشر.</div><h1 data-i18n="headline">أرسل ملفاتك<br><em>بلا تعقيد.</em></h1><p data-i18n="intro">أنشئ جلسة، شارك الرابط، وانقل ملفاتك مباشرة بين الأجهزة.</p></section>
 <section class="workspace" aria-label="نقل الملفات">
-<div class="mode-tabs" role="tablist"><button id="sendTab" class="mode-tab active" role="tab" aria-selected="true" data-i18n="sendTab">إرسال ملفات</button><button id="receiveTab" class="mode-tab" role="tab" aria-selected="false" data-i18n="receiveTab">استقبال ملفات</button></div>
+<div class="mode-tabs" role="tablist"><button id="sendTab" class="mode-tab active" role="tab" aria-selected="true" data-i18n="sendTab">إرسال ملفات</button><button id="receiveTab" class="mode-tab" role="tab" aria-selected="false" data-i18n="receiveTab">استقبال ملفات</button><button id="localTab" class="mode-tab" role="tab" aria-selected="false">اتصال محلي</button></div>
 <section id="sendPanel" class="panel" role="tabpanel">
 <div class="panel-heading"><div><span class="step">01</span><h2 data-i18n="sendTitle">أنشئ جلسة إرسال</h2></div><span class="pill" id="sessionState" data-i18n="notReady">غير متصل</span></div>
 <p class="muted" data-i18n="sendHint">ابدأ جلسة آمنة مؤقتة، ثم أرسل رابطها إلى الجهاز المستقبل.</p>
@@ -20,17 +20,23 @@
 <label for="shareLink" data-i18n="shareLink">رابط الانضمام</label><div class="copy-row"><input id="shareLink" readonly aria-label="رابط الانضمام"><button id="copyLink" class="secondary" type="button" data-i18n="copy">نسخ</button></div>
 <div class="share-bottom"><div id="qrCode" class="qr" aria-label="رمز QR"></div><div class="share-code"><span data-i18n="sessionCode">رمز الجلسة</span><strong id="sessionCode">—</strong><button id="copyCode" class="text-button" type="button" data-i18n="copyCode">نسخ الرمز</button></div></div>
 </div>
-<div class="wifi-card"><div class="wifi-title"><strong>إرسال مباشر عبر الواي فاي</strong><span>بدون خادم إشارات أو إنترنت</span></div><p class="muted">إذا كان الجهازان على شبكة Wi-Fi نفسها، أنشئ عرض الاتصال ثم انسخه إلى الجهاز المستقبل.</p><button id="createWifiOffer" class="secondary wide" type="button">إنشاء اتصال واي فاي مباشر</button><div id="wifiSenderSetup" class="hidden wifi-steps"><label for="wifiOffer">عرض الاتصال — أرسله إلى الجهاز المستقبل</label><textarea id="wifiOffer" rows="4" readonly></textarea><button id="copyWifiOffer" class="secondary wide" type="button">نسخ عرض الاتصال</button><label for="wifiAnswerInput">الصق إجابة الجهاز المستقبل هنا</label><textarea id="wifiAnswerInput" rows="4" placeholder="الصق إجابة الاتصال هنا"></textarea><button id="applyWifiAnswer" class="primary wide" type="button">تأكيد الإجابة والاتصال</button><p id="wifiSenderStatus" class="muted"></p></div></div>
 <div id="sendFilesArea" class="hidden"><button id="stopSender" class="danger wide hidden" type="button" data-i18n="stop">إيقاف الاتصال</button>
 <div class="divider"></div><div class="panel-heading compact"><div><span class="step">02</span><h2 data-i18n="chooseFiles">اختر الملفات</h2></div><span class="muted" id="peerCount">0</span></div>
 <label class="dropzone" for="fileInput" id="dropzone"><span class="upload-icon">＋</span><strong data-i18n="dropTitle">أضف الملفات للإرسال</strong><span data-i18n="dropHint">اضغط للاختيار أو اسحب الملفات إلى هنا</span><small data-i18n="multiHint">يمكنك اختيار عدة ملفات</small></label><input id="fileInput" type="file" multiple hidden>
 <div id="fileList" class="file-list"></div><button id="sendFiles" class="primary wide" type="button" disabled data-i18n="sendNow">إرسال الملفات إلى الأجهزة المتصلة</button><div id="sendProgress" class="progress-wrap hidden"><div class="progress-meta"><span id="sendStatus">—</span><strong id="sendPercent">0%</strong></div><div class="progress-track"><span id="sendBar"></span></div></div>
 </div>
 </section>
+<section id="localPanel" class="panel hidden" role="tabpanel">
+<div class="panel-heading"><div><span class="step">Wi-Fi</span><h2>الاتصال المحلي التلقائي</h2></div><span class="pill" id="discoveryState">غير متصل</span></div>
+<p class="muted">افتح هذا القسم على الجهازين. ستظهر الأجهزة المتصلة بخدمة الاكتشاف من عنوان الشبكة العامة نفسه، ثم يبدأ الاتصال المباشر دون رموز أو نسخ ولصق.</p>
+<label for="discoveryUrl">رابط خدمة اكتشاف الأجهزة</label><div class="copy-row"><input id="discoveryUrl" type="url" inputmode="url" placeholder="wss://your-worker.workers.dev/ws" autocomplete="url"><button id="connectDiscovery" class="primary" type="button">اتصال</button></div>
+<div class="discovery-actions"><span class="muted">تُحفظ قيمة الرابط على هذا الجهاز.</span><button id="refreshDevices" class="text-button" type="button">تحديث القائمة</button></div>
+<div class="device-list-heading"><strong>الأجهزة المتاحة</strong><span class="pill" id="localDeviceCount">0</span></div><div id="localDeviceList" class="device-list"><p class="muted device-empty">اتصل بخدمة الاكتشاف لعرض الأجهزة.</p></div>
+<p class="muted local-note">تحتاج خدمة الاكتشاف إلى النشر مرة واحدة. بعد ضبط رابطها هنا، لا يحتاج المستخدم إلى رموز أو تطبيقات إضافية. نقل الملفات يستخدم WebRTC مباشرة، وقد يتعذر الاتصال في بعض الشبكات التي تعزل الأجهزة.</p>
+</section>
 <section id="receivePanel" class="panel hidden" role="tabpanel">
 <div class="panel-heading"><div><span class="step">01</span><h2 data-i18n="receiveTitle">انضم إلى جلسة</h2></div><span class="pill" id="receiveState" data-i18n="waiting">بانتظار الاتصال</span></div>
 <p class="muted" data-i18n="receiveHint">افتح رابط المرسل، أو أدخل رمز الجلسة الذي وصلك.</p>
-<div class="wifi-card"><div class="wifi-title"><strong>استقبال مباشر عبر الواي فاي</strong><span>اتصال محلي بين الجهازين</span></div><p class="muted">الصق عرض الاتصال الذي أرسله الجهاز الآخر، ثم أرسل له إجابة الاتصال.</p><label for="wifiOfferInput">عرض الاتصال من المرسل</label><textarea id="wifiOfferInput" rows="4" placeholder="الصق عرض الاتصال هنا"></textarea><button id="acceptWifiOffer" class="secondary wide" type="button">إنشاء إجابة الاتصال</button><div id="wifiReceiverAnswer" class="hidden wifi-steps"><label for="wifiAnswer">إجابة الاتصال — أرسلها إلى المرسل</label><textarea id="wifiAnswer" rows="4" readonly></textarea><button id="copyWifiAnswer" class="secondary wide" type="button">نسخ إجابة الاتصال</button><p id="wifiReceiverStatus" class="muted"></p></div></div>
 <button id="chooseSaveDirectory" class="secondary wide" type="button" data-i18n="storagePick">اختيار مجلد الحفظ</button><p id="storageStatus" class="muted storage-hint" data-i18n="storageHint">تُكتب الأجزاء مباشرة في التخزين، دون تجميع الملف في الذاكرة.</p><label for="roomInput" data-i18n="roomCode">رمز الجلسة أو رابطها</label><div class="copy-row"><input id="roomInput" type="text" autocomplete="off" placeholder="مثال: 8f2a..."><button id="joinSession" class="primary" type="button" data-i18n="join">اتصال</button></div>
 <button id="stopReceiver" class="danger wide hidden" type="button" data-i18n="stop">إيقاف الاتصال</button><div id="receiveProgress" class="progress-wrap hidden"><div class="progress-meta"><span id="receiveStatus" data-i18n="receiving">جارٍ استقبال الملفات</span><strong id="receivePercent">0%</strong></div><div class="progress-track"><span id="receiveBar"></span></div></div><div id="receivedList" class="file-list"></div>
 </section>
@@ -39,5 +45,5 @@
 <footer><span data-i18n="footer">وصلة — لا يتطلب تثبيت تطبيق.</span><span data-i18n="footnote">لا تغلق الصفحة أثناء النقل.</span></footer>
 </main>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script><script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script><script src="./app.js?v=10" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script><script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script><script src="./app.js?v=11" defer></script>
 </body></html>
