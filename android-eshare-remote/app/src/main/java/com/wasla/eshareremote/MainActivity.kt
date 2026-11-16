@@ -90,8 +90,13 @@ class MainActivity : Activity() {
                 minWidth = 0
                 setPadding(dp(5), dp(3), dp(5), dp(3))
                 setTextColor(if (primary) 0xff031426.toInt() else white)
-                background = if (primary) surface(0xff16bce9.toInt(), 18, 0xff59eaff.toInt())
-                    else surface(panel, 20, 0xff315987.toInt())
+                background = android.graphics.drawable.StateListDrawable().apply {
+                    addState(intArrayOf(android.R.attr.state_pressed),
+                        surface(if (primary) 0xff087fae.toInt() else 0xff17618d.toInt(), 20, 0xff62eaff.toInt()))
+                    addState(intArrayOf(),
+                        if (primary) surface(0xff16bce9.toInt(), 18, 0xff59eaff.toInt())
+                        else surface(panel, 20, 0xff315987.toInt()))
+                }
                 stateListAnimator = null
                 elevation = dp(4).toFloat()
             }
