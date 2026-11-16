@@ -41,7 +41,7 @@ class MainActivity : Activity() {
     @Volatile private var lastAirSendAt = 0L
     // Conservative defaults: reduce gyro speed and keep touchpad fine-grained.
     private val gyroSensitivity = 0.35f
-    private val touchSensitivity = 0.38f
+    private val touchSensitivity = 0.12f
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
@@ -221,14 +221,15 @@ class MainActivity : Activity() {
                 android.view.MotionEvent.ACTION_MOVE -> {
                     val dx = event.x - downX
                     val dy = event.y - downY
-                    if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > dp(3)) moved = true
+                    if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > dp(1)) moved = true
                     if (moved) {
                         // EShare maps pointer deltas to a 1280x720 logical surface.
                         // Scale by the actual touch surface dimensions for consistent travel.
                         val scaleX = 1280f / view.width.coerceAtLeast(1)
                         val scaleY = 720f / view.height.coerceAtLeast(1)
-                        // Natural pointer mapping: move the finger/device right or down to move the cursor the same way.
-                        sendAirMouse(-dx * scaleX * touchSensitivity, -dy * scaleY * touchSensitivity)
+                        // Touchpad mapping: finger movement and cursor movement must have the same direction.
+                        // Lower gain prevents the cursor from racing to the screen edges.
+                        sendAirMouse(dx * scaleX * touchSensitivity, dy * scaleY * touchSensitivity)
                         downX = event.x; downY = event.y
                     }
                     true
@@ -805,9 +806,9 @@ class MainActivity : Activity() {
                 connect(Device("التلفاز", ip, discoverPort(ip)))
             }
             if (delta.first != 0f || delta.second != 0f) {
-                // Match the original EShare client's CRLF framing and 55 ms move interval.
+                // Keep EShare framing while sending movement more frequently for smoother pointer tracking.
                 val now = System.currentTimeMillis()
-                val waitMs = 55L - (now - lastAirSendAt)
+                val waitMs = 30L - (now - lastAirSendAt)
                 if (waitMs > 0L) Thread.sleep(waitMs)
                 val packet = "AIRMOUSEEVNET\r\n${delta.first}\r\n${delta.second}\r\n2\r\n\r\n"
                 output?.write(packet.toByteArray(Charsets.UTF_8))
