@@ -26,7 +26,7 @@ async function createIncomingTarget(meta){
  const name=safeFileName(meta.name);
  if(saveDirectory){
   let target=name,n=1;
-  while(true){try{await saveDirectory.getFileHandle(target);target=name.replace(/(\\.[^.]+)?$/,(_,ext)=>(ext||'')+' ('+(n++)+')')}catch(e){if(e.name==='NotFoundError')break;throw e}}
+  while(true){try{await saveDirectory.getFileHandle(target);target=name.replace(/(\.[^.]+)?$/,(_,ext)=>(ext||'')+' ('+(n++)+')')}catch(e){if(e.name==='NotFoundError')break;throw e}}
   const handle=await saveDirectory.getFileHandle(target,{create:true});
   return{writer:await handle.createWritable(),handle,kind:'device',name:target};
  }
