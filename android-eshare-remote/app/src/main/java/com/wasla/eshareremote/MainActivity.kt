@@ -261,47 +261,120 @@ class MainActivity : Activity() {
             marginEnd = dp(7)
         })
 
-        val navArea = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
-            background = surface(0xff10223e.toInt(), 100, 0xff168ac2.toInt())
-            setPadding(dp(5), dp(7), dp(5), dp(7))
+        // Four directional sectors form one continuous ring around the unchanged OK button.
+        val navArea = object : View(this) {
+            private val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                style = android.graphics.Paint.Style.FILL
+            }
+            private val line = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                style = android.graphics.Paint.Style.STROKE
+                strokeWidth = dp(1.5f)
+                color = 0xff477ca8.toInt()
+            }
+            private val label = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0xff8cecff.toInt()
+                textAlign = android.graphics.Paint.Align.CENTER
+                typeface = Typeface.DEFAULT_BOLD
+                textSize = dp(25f).toFloat()
+            }
+            private val centerLabel = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0xffffffff.toInt()
+                textAlign = android.graphics.Paint.Align.CENTER
+                typeface = Typeface.DEFAULT_BOLD
+                textSize = dp(15f).toFloat()
+            }
+            private var pressedSector = -1
+            private val keys = intArrayOf(19, 22, 20, 21)
+            private val symbols = arrayOf("▲", "▶", "▼", "◀")
+
+            override fun onDraw(canvas: android.graphics.Canvas) {
+                super.onDraw(canvas)
+                val cx = width / 2f
+                val cy = height / 2f
+                val outer = (kotlin.math.min(width, height) / 2f) - dp(5).toFloat()
+                val inner = outer * 0.43f
+                val bounds = android.graphics.RectF(cx - outer, cy - outer, cx + outer, cy + outer)
+                for (i in 0..3) {
+                    fill.color = if (pressedSector == i) 0xff16bce9.toInt() else 0xff173657.toInt()
+                    canvas.drawArc(bounds, -135f + i * 90f, 90f, true, fill)
+                }
+                canvas.drawCircle(cx, cy, outer, line)
+                canvas.drawLine(cx, cy - outer, cx, cy - inner, line)
+                canvas.drawLine(cx, cy + inner, cx, cy + outer, line)
+                canvas.drawLine(cx - outer, cy, cx - inner, cy, line)
+                canvas.drawLine(cx + inner, cy, cx + outer, cy, line)
+                fill.color = if (pressedSector == 4) 0xff12a8df.toInt() else 0xff087fc7.toInt()
+                canvas.drawCircle(cx, cy, inner, fill)
+                line.color = 0xff54eaff.toInt()
+                canvas.drawCircle(cx, cy, inner, line)
+                line.color = 0xff477ca8.toInt()
+                val radius = (outer + inner) / 2f
+                for (i in 0..3) {
+                    val angle = Math.toRadians((-90.0 + i * 90.0))
+                    val x = cx + kotlin.math.cos(angle).toFloat() * radius
+                    val y = cy + kotlin.math.sin(angle).toFloat() * radius
+                    canvas.drawText(symbols[i], x, y - (label.ascent() + label.descent()) / 2f, label)
+                }
+                canvas.drawText("OK", cx, cy - (centerLabel.ascent() + centerLabel.descent()) / 2f, centerLabel)
+            }
+
+            override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+                val cx = width / 2f
+                val cy = height / 2f
+                val dx = event.x - cx
+                val dy = event.y - cy
+                val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+                val outer = (kotlin.math.min(width, height) / 2f) - dp(5).toFloat()
+                fun hitSector(): Int {
+                    if (distance <= outer * 0.43f) return 4
+                    if (distance > outer) return -1
+                    val angle = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble()))
+                    return when {
+                        angle >= -135 && angle < -45 -> 0
+                        angle >= -45 && angle < 45 -> 1
+                        angle >= 45 && angle < 135 -> 2
+                        else -> 3
+                    }
+                }
+                when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        pressedSector = hitSector()
+                        invalidate()
+                        return pressedSector >= 0
+                    }
+                    android.view.MotionEvent.ACTION_MOVE -> {
+                        val next = hitSector()
+                        if (next != pressedSector) { pressedSector = next; invalidate() }
+                        return true
+                    }
+                    android.view.MotionEvent.ACTION_UP -> {
+                        val selected = hitSector()
+                        val pressed = pressedSector
+                        pressedSector = -1
+                        invalidate()
+                        if (selected >= 0 && selected == pressed) sendKey(if (selected == 4) 23 else keys[selected])
+                        performClick()
+                        return true
+                    }
+                    android.view.MotionEvent.ACTION_CANCEL -> {
+                        pressedSector = -1
+                        invalidate()
+                        return true
+                    }
+                }
+                return true
+            }
+
+            override fun performClick(): Boolean {
+                super.performClick()
+                return true
+            }
+        }.apply {
+            contentDescription = "أزرار الاتجاهات حول زر OK"
+            isClickable = true
             elevation = dp(7).toFloat()
         }
-        fun navButton(symbol: String, key: Int?, size: Int, primary: Boolean = false): Button =
-            Button(this).apply {
-                text = symbol
-                textSize = if (primary) 19f else 20f
-                isAllCaps = false
-                minWidth = 0; minHeight = 0
-                setPadding(0, 0, 0, 0)
-                setTextColor(if (primary) white else 0xff75eaff.toInt())
-                background = android.graphics.drawable.GradientDrawable().apply {
-                    shape = android.graphics.drawable.GradientDrawable.OVAL
-                    setColor(if (primary) 0xff087fc7.toInt() else 0xff1a3457.toInt())
-                    setStroke(dp(if (primary) 2 else 1), if (primary) 0xff42e6ff.toInt() else 0xff416b99.toInt())
-                }
-                stateListAnimator = null
-                elevation = dp(3).toFloat()
-                if (key != null) setOnClickListener { sendKey(key) }
-                layoutParams = LinearLayout.LayoutParams(dp(size), dp(size)).apply {
-                    setMargins(dp(2), dp(2), dp(2), dp(2))
-                }
-            }
-        fun navRow(left: Button, center: Button, right: Button) =
-            LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-                layoutDirection = View.LAYOUT_DIRECTION_LTR
-                addView(left); addView(center); addView(right)
-            }
-        navArea.addView(navRow(navButton("", null, 34).apply { visibility = View.INVISIBLE }, navButton("▲", 19, 43), navButton("", null, 34).apply { visibility = View.INVISIBLE }))
-        navArea.addView(navRow(navButton("◀", 21, 43), navButton("OK", 23, 56, true), navButton("▶", 22, 43)))
-        navArea.addView(navRow(navButton("", null, 34).apply { visibility = View.INVISIBLE }, navButton("▼", 20, 43), navButton("", null, 34).apply { visibility = View.INVISIBLE }))
-        deck.addView(navArea, LinearLayout.LayoutParams(0, dp(165), 1f).apply {
-            marginStart = dp(2); marginEnd = dp(2)
-        })
+
 
         val volumeStack = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
