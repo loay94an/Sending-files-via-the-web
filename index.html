@@ -27,12 +27,16 @@
 </div>
 </section>
 <section id="localPanel" class="panel hidden" role="tabpanel">
-<div class="panel-heading"><div><span class="step">Wi-Fi</span><h2>الاتصال المحلي التلقائي</h2></div><span class="pill" id="discoveryState">غير متصل</span></div>
-<p class="muted">افتح هذا القسم على الجهازين. ستظهر الأجهزة المتصلة بخدمة الاكتشاف من عنوان الشبكة العامة نفسه، ثم يبدأ الاتصال المباشر دون رموز أو نسخ ولصق.</p>
-<label for="discoveryUrl">رابط خدمة اكتشاف الأجهزة</label><div class="copy-row"><input id="discoveryUrl" type="url" inputmode="url" placeholder="wss://your-worker.workers.dev/ws" autocomplete="url"><button id="connectDiscovery" class="primary" type="button">اتصال</button></div>
-<div class="discovery-actions"><span class="muted">تُحفظ قيمة الرابط على هذا الجهاز.</span><button id="refreshDevices" class="text-button" type="button">تحديث القائمة</button></div>
-<div class="device-list-heading"><strong>الأجهزة المتاحة</strong><span class="pill" id="localDeviceCount">0</span></div><div id="localDeviceList" class="device-list"><p class="muted device-empty">اتصل بخدمة الاكتشاف لعرض الأجهزة.</p></div>
-<p class="muted local-note">تحتاج خدمة الاكتشاف إلى النشر مرة واحدة. بعد ضبط رابطها هنا، لا يحتاج المستخدم إلى رموز أو تطبيقات إضافية. نقل الملفات يستخدم WebRTC مباشرة، وقد يتعذر الاتصال في بعض الشبكات التي تعزل الأجهزة.</p>
+<div class="panel-heading"><div><span class="step">Wi-Fi</span><h2>اقتران ثم نقل محلي</h2></div><span class="pill" id="discoveryState">غير متصل</span></div>
+<p class="muted">يُستخدم الإنترنت مؤقتًا للتعرّف على الجهازين وتبادل معلومات WebRTC فقط. بعد نجاح الاتصال المباشر عبر عناوين الشبكة المحلية، يمكنك فصل الإنترنت؛ تنتقل الملفات عبر Wi-Fi مباشرة ولا تُرفع إلى خادم.</p>
+<button id="localCreate" class="primary wide" type="button">إنشاء اتصال وعرض QR</button>
+<div id="localPairArea" class="wifi-card hidden"><div class="wifi-title"><strong>امسح الرمز من الجهاز الآخر</strong><span>بانتظار طلب الاقتران</span></div><div class="share-bottom"><div id="localQr" class="qr" aria-label="رمز الاقتران المحلي"></div><div class="share-code"><span>معرّف الاقتران</span><strong id="localPairCode">—</strong><small class="muted">يمكن إدخال المعرّف يدويًا إذا تعذر مسح QR.</small></div></div></div>
+<div class="divider"></div><label for="localCodeInput">امسح رمز الجهاز الآخر أو أدخل رابط/معرّف الاقتران</label>
+<div class="copy-row"><input id="localCodeInput" type="text" autocomplete="off" placeholder="امسح QR أو أدخل الرابط"><button id="localScan" class="secondary" type="button">مسح QR</button></div>
+<button id="localJoin" class="primary wide" type="button">طلب الاقتران</button>
+<div id="qrScanner" class="qr-scanner hidden"><video id="qrVideo" playsinline muted></video><button id="localScannerStop" class="secondary wide" type="button">إيقاف الكاميرا</button></div>
+<button id="localStop" class="danger wide hidden" type="button">إيقاف الاتصال المحلي</button>
+<p class="muted local-note">بعد الموافقة، يتحقق وصلة من أن مسار WebRTC المختار محلي (Host-to-Host وعناوين خاصة أو mDNS). إذا لم يثبت أن المسار محلي، يُغلق الاتصال بدل تمرير الملفات عبر الإنترنت. يجب فتح الموقع وتحميله قبل فصل الإنترنت.</p>
 </section>
 <section id="receivePanel" class="panel hidden" role="tabpanel">
 <div class="panel-heading"><div><span class="step">01</span><h2 data-i18n="receiveTitle">انضم إلى جلسة</h2></div><span class="pill" id="receiveState" data-i18n="waiting">بانتظار الاتصال</span></div>
@@ -44,6 +48,7 @@
 <section class="features"><article><span>↔</span><div><strong data-i18n="f1title">من جهاز إلى جهاز</strong><p data-i18n="f1text">الملفات تنتقل عبر اتصال WebRTC بين الطرفين متى أمكن.</p></div></article><article><span>▦</span><div><strong data-i18n="f2title">رابط ورمز QR</strong><p data-i18n="f2text">شارك الجلسة بالرابط أو امسح الرمز من الجهاز الآخر.</p></div></article><article><span>⌘</span><div><strong data-i18n="f3title">مناسب للشاشات والريموت</strong><p data-i18n="f3text">عناصر كبيرة وتنقل واضح بلوحة المفاتيح.</p></div></article></section>
 <footer><span data-i18n="footer">وصلة — لا يتطلب تثبيت تطبيق.</span><span data-i18n="footnote">لا تغلق الصفحة أثناء النقل.</span></footer>
 </main>
+<div id="pairRequest" class="pair-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="pairRequestTitle"><div class="pair-dialog"><h2 id="pairRequestTitle">طلب اقتران جديد</h2><p>يريد هذا الجهاز الاتصال بك:</p><strong id="pairRequestName">جهاز آخر</strong><div class="pair-actions"><button id="pairReject" class="secondary" type="button">رفض</button><button id="pairAccept" class="primary" type="button">موافقة</button></div></div></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script><script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script><script src="./app.js?v=11" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script><script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script><script src="./app.js?v=12" defer></script>
 </body></html>
