@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101827">
+<meta name="description" content="نقل ملفات مباشر بين أجهزتك دون رفعها إلى خادم.">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="./styles.css">
+<title>نقل مباشر — Direct Transfer</title>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="./" aria-label="الرئيسية"><span class="brand-mark">↗</span><span data-i18n="brand">نقل مباشر</span></a>
+  <div class="top-actions">
+    <span class="privacy"><i></i><span data-i18n="private">اتصال مباشر وخصوصي</span></span>
+    <button id="langBtn" class="ghost" type="button" aria-label="Change language">EN</button>
+  </div>
+</header>
+<main id="app" class="shell">
+  <section id="homeView" class="hero">
+    <div class="eyebrow"><span class="pulse"></span><span data-i18n="eyebrow">من جهاز إلى جهاز — بلا رفع</span></div>
+    <h1 data-i18n="headline">ملفاتك تنتقل مباشرة.<br>لا تمرّ بخادم.</h1>
+    <p class="intro" data-i18n="intro">أنشئ رابطاً واحداً، أرسله إلى جهازك الآخر، وابدأ النقل بعد الموافقة.</p>
+    <div class="home-grid">
+      <article class="panel send-panel">
+        <div class="panel-icon">↑</div>
+        <h2 data-i18n="sendTitle">إرسال ملفات</h2>
+        <p data-i18n="sendDesc">اختر ملفاً أو مجموعة ملفات، ثم شارك رابط الجلسة.</p>
+        <label class="file-pick" for="fileInput"><span>＋</span><span data-i18n="chooseFiles">اختيار الملفات</span></label>
+        <input id="fileInput" type="file" multiple>
+        <div id="selectedFiles" class="selected-files" aria-live="polite"></div>
+        <button id="createBtn" class="primary wide" type="button" disabled data-i18n="createSession">إنشاء رابط استقبال</button>
+        <small data-i18n="sendHint">لن يبدأ الإرسال قبل موافقة الجهاز المستقبل.</small>
+      </article>
+      <article class="panel receive-panel">
+        <div class="panel-icon down">↓</div>
+        <h2 data-i18n="receiveTitle">استقبال ملفات</h2>
+        <p data-i18n="receiveDesc">افتح رابط الجلسة الذي وصلك، أو الصقه هنا.</p>
+        <label class="field-label" for="joinLink" data-i18n="sessionLink">رابط الجلسة</label>
+        <input id="joinLink" class="text-field" type="url" placeholder="https://example.com/?room=…" autocomplete="url">
+        <button id="openLinkBtn" class="secondary wide" type="button" data-i18n="openLink">فتح الرابط</button>
+        <small data-i18n="receiveHint">ستظهر لك تفاصيل الجلسة قبل الاقتران.</small>
+      </article>
+    </div>
+    <div class="feature-row">
+      <span>◇ <b data-i18n="feature1">WebRTC مباشر</b></span><span>◇ <b data-i18n="feature2">لا تخزين مركزي</b></span><span>◇ <b data-i18n="feature3">عدة أجهزة</b></span><span>◇ <b data-i18n="feature4">استكمال النقل</b></span>
+    </div>
+  </section>
+
+  <section id="sessionView" class="session-view hidden" aria-live="polite">
+    <button id="backBtn" class="back-link" type="button">← <span data-i18n="back">العودة</span></button>
+    <div class="session-head">
+      <div><div class="eyebrow"><span class="pulse"></span><span id="roleLabel"></span></div><h1 id="sessionTitle"></h1><p id="sessionSubtitle" class="muted"></p></div>
+      <span id="sessionState" class="state-pill">…</span>
+    </div>
+    <div id="senderTools" class="panel session-panel hidden">
+      <h2 data-i18n="shareTitle">شارك رابط الجلسة</h2>
+      <p data-i18n="shareDesc">أرسل الرابط إلى من تريد استقبال الملفات على جهازه.</p>
+      <div class="copy-row"><input id="shareUrl" class="text-field" readonly><button id="copyBtn" class="secondary" type="button" data-i18n="copy">نسخ</button><button id="nativeShareBtn" class="ghost" type="button" data-i18n="share">مشاركة</button></div>
+      <div id="pendingPeers" class="peer-list"></div>
+      <button id="cancelSessionBtn" class="danger" type="button" data-i18n="cancelSession">إلغاء الجلسة</button>
+    </div>
+    <div id="receiverPrompt" class="panel prompt-panel hidden">
+      <div class="prompt-symbol">⇄</div><h2 data-i18n="pairQuestion">هل تريد الاقتران واستقبال البيانات؟</h2>
+      <p data-i18n="pairDescription">المرسل ينتظر موافقتك للاتصال بهذا الجهاز.</p>
+      <div class="button-row"><button id="acceptBtn" class="primary" type="button" data-i18n="accept">موافقة واقتران</button><button id="rejectBtn" class="secondary" type="button" data-i18n="reject">رفض</button></div>
+    </div>
+    <div id="transferPanel" class="panel transfer-panel hidden">
+      <div class="transfer-top"><h2 data-i18n="transfers">عمليات النقل</h2><span id="peerCount" class="muted"></span></div>
+      <div id="transferList"></div>
+      <div id="incomingActions" class="hidden"><button id="saveAllBtn" class="primary" type="button" data-i18n="saveFiles">حفظ الملفات المستلمة</button></div>
+    </div>
+  </section>
+
+  <section class="history-section">
+    <div class="section-heading"><div><span class="eyebrow" data-i18n="localOnly">على هذا الجهاز فقط</span><h2 data-i18n="history">سجل العمليات</h2></div><button id="clearHistoryBtn" class="ghost small" type="button" data-i18n="clearHistory">مسح السجل</button></div>
+    <div id="historyList" class="history-list"><p class="muted" data-i18n="emptyHistory">لا توجد عمليات سابقة.</p></div>
+  </section>
+</main>
+<footer><span data-i18n="footer">ملفاتك لا تمر عبر خوادمنا. خادم التنسيق يتبادل معلومات الاتصال فقط.</span><span>Direct Transfer · WebRTC</span></footer>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="./app.js" defer></script>
+</body>
+</html>
