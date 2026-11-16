@@ -187,18 +187,25 @@ class MainActivity : Activity() {
     }
 
     private fun discoverPort(ip: String): Int {
-        DatagramSocket(48689).use { udp ->
-            udp.soTimeout = 1200
-            val bytes = packet()
-            udp.send(DatagramPacket(bytes, bytes.size, InetAddress.getByName(ip), 48689))
-            val buffer = ByteArray(1024)
-            val response = DatagramPacket(buffer, buffer.size)
-            udp.receive(response)
-            val text = String(response.data, 0, response.length, Charsets.UTF_8)
-            val fields = text.split(":")
-            if (fields.size >= 4 && text.startsWith("ECloudBox")) return fields[2].toInt()
+        // Some EShare firmware accepts TCP control on 8121 but does not answer
+        // a directed UDP discovery packet. Keep manual-IP connection usable.
+        return try {
+            DatagramSocket().use { udp ->
+                udp.soTimeout = 1200
+                val bytes = packet()
+                udp.send(DatagramPacket(bytes, bytes.size, InetAddress.getByName(ip), 48689))
+                val buffer = ByteArray(1024)
+                val response = DatagramPacket(buffer, buffer.size)
+                udp.receive(response)
+                val text = String(response.data, 0, response.length, Charsets.UTF_8)
+                val fields = text.split(":")
+                if (text.startsWith("ECloudBox") && fields.size >= 4) {
+                    fields[2].toIntOrNull() ?: 8121
+                } else 8121
+            }
+        } catch (_: Exception) {
+            8121
         }
-        return 8121
     }
 
     private fun connect(device: Device) {
