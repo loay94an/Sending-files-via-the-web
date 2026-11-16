@@ -27,6 +27,8 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
+    // Keep pointer traffic off the discovery/key-command executor to avoid input stalls.
+    private val airMouseIo = Executors.newSingleThreadExecutor()
     private val airMouseLock = Any()
     private var pendingAirDx = 0f
     private var pendingAirDy = 0f
@@ -43,7 +45,7 @@ class MainActivity : Activity() {
     @Volatile private var lastAirSendAt = 0L
     // Keep air-mouse movement controlled; touchpad sensitivity is independent.
     private val gyroSensitivity = 0.18f
-    private val gyroSmoothing = 0.32f
+    private val gyroSmoothing = 0.22f
     private val touchSensitivity = 0.12f
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
@@ -786,10 +788,10 @@ class MainActivity : Activity() {
             // Exponential smoothing reduces jitter while preserving the established direction.
             smoothedGyroDx += (targetDx - smoothedGyroDx) * gyroSmoothing
             smoothedGyroDy += (targetDy - smoothedGyroDy) * gyroSmoothing
-            if (kotlin.math.abs(smoothedGyroDx) > 0.015f ||
-                kotlin.math.abs(smoothedGyroDy) > 0.015f) {
-                sendAirMouse(smoothedGyroDx, smoothedGyroDy)
-            }
+            // Suppress residual sensor jitter without repeatedly emitting near-zero packets.
+            val outX = if (kotlin.math.abs(smoothedGyroDx) < 0.035f) 0f else smoothedGyroDx
+            val outY = if (kotlin.math.abs(smoothedGyroDy) < 0.035f) 0f else smoothedGyroDy
+            if (outX != 0f || outY != 0f) sendAirMouse(outX, outY)
         }
     }
 
@@ -802,7 +804,7 @@ class MainActivity : Activity() {
             airMouseWriteQueued = true
         }
         // Merge rapid sensor/touch events so the executor cannot build a lagging queue.
-        io.execute { drainAirMouseMovement() }
+        airMouseIo.execute { drainAirMouseMovement() }
     }
 
     private fun drainAirMouseMovement() {
@@ -818,9 +820,10 @@ class MainActivity : Activity() {
                 connect(Device("التلفاز", ip, discoverPort(ip)))
             }
             if (delta.first != 0f || delta.second != 0f) {
-                // Keep EShare framing while sending movement more frequently for smoother pointer tracking.
+                // Dedicated pointer worker prevents discovery/key tasks from delaying cursor packets.
+                // A steady ~50 Hz cadence avoids bursts while keeping motion responsive.
                 val now = System.currentTimeMillis()
-                val waitMs = 30L - (now - lastAirSendAt)
+                val waitMs = 20L - (now - lastAirSendAt)
                 if (waitMs > 0L) Thread.sleep(waitMs)
                 val packet = "AIRMOUSEEVNET\r\n${delta.first}\r\n${delta.second}\r\n2\r\n\r\n"
                 output?.write(packet.toByteArray(Charsets.UTF_8))
@@ -835,7 +838,7 @@ class MainActivity : Activity() {
                 if (pendingAirDx != 0f || pendingAirDy != 0f) true
                 else { airMouseWriteQueued = false; false }
             }
-            if (again) io.execute { drainAirMouseMovement() }
+            if (again) airMouseIo.execute { drainAirMouseMovement() }
         }
     }
 
@@ -865,6 +868,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         closeConnection()
         io.shutdownNow()
+        airMouseIo.shutdownNow()
         super.onDestroy()
     }
 }
