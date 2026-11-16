@@ -126,13 +126,47 @@ class MainActivity : Activity() {
             setTextColor(0xffcbd5e1.toInt())
         }
         touchPad.addView(touchHint, FrameLayout.LayoutParams(-1, -1))
+        // The TV's EShare build accepts KEYEVENT reliably, but its touch-event
+        // packet format is not confirmed. Use the verified D-pad protocol for
+        // swipe navigation instead of sending the unsupported TOUCHLOGNPRESS.
         touchPad.setOnTouchListener { view, event ->
-            if (event.action == android.view.MotionEvent.ACTION_UP) {
-                val x = (event.x / view.width.coerceAtLeast(1) * 1280f).toInt().coerceIn(0, 1279)
-                val y = (event.y / view.height.coerceAtLeast(1) * 720f).toInt().coerceIn(0, 719)
-                sendTouchTap(x, y)
+            val threshold = dp(18).toFloat()
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    view.setTag(intArrayOf(event.x.toInt(), event.y.toInt(), 0, 0))
+                    true
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val state = view.getTag() as? IntArray
+                    if (state != null) {
+                        var dx = event.x.toInt() - state[0]
+                        var dy = event.y.toInt() - state[1]
+                        var moved = false
+                        while (kotlin.math.abs(dx) >= threshold) {
+                            sendKey(if (dx > 0) 22 else 21) // right / left
+                            dx += if (dx > 0) -threshold.toInt() else threshold.toInt()
+                            moved = true
+                        }
+                        while (kotlin.math.abs(dy) >= threshold) {
+                            sendKey(if (dy > 0) 20 else 19) // down / up
+                            dy += if (dy > 0) -threshold.toInt() else threshold.toInt()
+                            moved = true
+                        }
+                        state[0] = event.x.toInt()
+                        state[1] = event.y.toInt()
+                        if (moved) state[2] = 1
+                    }
+                    true
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    val state = view.getTag() as? IntArray
+                    if (state == null || state[2] == 0) sendKey(23) // tap = OK/select
+                    view.performClick()
+                    true
+                }
+                android.view.MotionEvent.ACTION_CANCEL -> true
+                else -> true
             }
-            true
         }
         root.addView(touchPad, LinearLayout.LayoutParams(-1, dp(112)).apply { bottomMargin = dp(4) })
 
@@ -385,24 +419,6 @@ class MainActivity : Activity() {
         output = socket.getOutputStream()
         prefs.edit().putString("ip", device.ip).apply()
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
-    }
-
-    private fun sendTouchTap(x: Int, y: Int) {
-        io.execute {
-            try {
-                if (tcp?.isConnected != true || tcp?.isClosed != false) {
-                    val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
-                    connect(Device("التلفاز", ip, discoverPort(ip)))
-                }
-                val message = "TOUCHLOGNPRESS\r\n[={$x,$y}]\r\n\r\n"
-                output?.write(message.toByteArray(Charsets.UTF_8))
-                output?.flush()
-                setStatus("تم إرسال اللمسة إلى الشاشة: $x, $y")
-            } catch (e: Exception) {
-                closeConnection()
-                setStatus("تعذر إرسال اللمسة: " + (e.message ?: "أعد الاتصال"))
-            }
-        }
     }
 
     private fun sendKey(key: Int) {
