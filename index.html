@@ -29,7 +29,7 @@
 <section id="receivePanel" class="panel hidden" role="tabpanel">
 <div class="panel-heading"><div><span class="step">01</span><h2 data-i18n="receiveTitle">انضم إلى جلسة</h2></div><span class="pill" id="receiveState" data-i18n="waiting">بانتظار الاتصال</span></div>
 <p class="muted" data-i18n="receiveHint">افتح رابط المرسل، أو أدخل رمز الجلسة الذي وصلك.</p>
-<label for="roomInput" data-i18n="roomCode">رمز الجلسة أو رابطها</label><div class="copy-row"><input id="roomInput" type="text" autocomplete="off" placeholder="مثال: 8f2a..."><button id="joinSession" class="primary" type="button" data-i18n="join">اتصال</button></div>
+<button id="chooseSaveDirectory" class="secondary wide" type="button" data-i18n="storagePick">اختيار مجلد الحفظ</button><p id="storageStatus" class="muted storage-hint" data-i18n="storageHint">تُكتب الأجزاء مباشرة في التخزين، دون تجميع الملف في الذاكرة.</p><label for="roomInput" data-i18n="roomCode">رمز الجلسة أو رابطها</label><div class="copy-row"><input id="roomInput" type="text" autocomplete="off" placeholder="مثال: 8f2a..."><button id="joinSession" class="primary" type="button" data-i18n="join">اتصال</button></div>
 <button id="stopReceiver" class="danger wide hidden" type="button" data-i18n="stop">إيقاف الاتصال</button><div id="receiveProgress" class="progress-wrap hidden"><div class="progress-meta"><span id="receiveStatus" data-i18n="receiving">جارٍ استقبال الملفات</span><strong id="receivePercent">0%</strong></div><div class="progress-track"><span id="receiveBar"></span></div></div><div id="receivedList" class="file-list"></div>
 </section>
 </section>
@@ -37,5 +37,5 @@
 <footer><span data-i18n="footer">وصلة — لا يتطلب تثبيت تطبيق.</span><span data-i18n="footnote">لا تغلق الصفحة أثناء النقل.</span></footer>
 </main>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script><script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script><script src="./app.js?v=6" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script><script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script><script src="./app.js?v=7" defer></script>
 </body></html>
