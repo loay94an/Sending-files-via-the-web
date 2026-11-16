@@ -7,6 +7,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.net.wifi.WifiManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.graphics.Typeface
 import android.view.Gravity
 import android.view.View
@@ -26,6 +30,11 @@ class MainActivity : Activity() {
     private var tcp: Socket? = null
     private var output: OutputStream? = null
     private var discoveryLock: WifiManager.MulticastLock? = null
+    private lateinit var sensorManager: SensorManager
+    private var gyroSensor: Sensor? = null
+    private var airMouseEnabled = false
+    private var lastGyroTimestamp = 0L
+    private val gyroSensitivity = 1.8f
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
@@ -42,6 +51,8 @@ class MainActivity : Activity() {
             finish()
             return
         }
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         buildUi()
         val saved = prefs.getString("ip", "") ?: ""
         ipInput.setText(saved)
@@ -114,7 +125,27 @@ class MainActivity : Activity() {
         pad.addView(buttonRow(" ", "▼", " ", null, 20, null))
         root.addView(pad, lp(-1, dp(132)))
 
-        addSectionLabel(root, "لوحة اللمس")
+        addSectionLabel(root, "الماوس الهوائي")
+        val airRow = compactRow()
+        val airToggle = Button(this).apply {
+            text = if (gyroSensor == null) "الجيروسكوب غير متاح" else "تشغيل التحريك بالهاتف"
+            textSize = 12f
+            isAllCaps = false
+            isEnabled = gyroSensor != null
+            backgroundTintList = ColorStateList.valueOf(0xff0f766e.toInt())
+            setTextColor(0xffffffff.toInt())
+            setOnClickListener {
+                airMouseEnabled = !airMouseEnabled
+                text = if (airMouseEnabled) "إيقاف التحريك الهوائي" else "تشغيل التحريك بالهاتف"
+                if (airMouseEnabled) startAirMouse() else stopAirMouse()
+                setStatus(if (airMouseEnabled) "الماوس الهوائي يعمل — حرّك الهاتف" else "تم إيقاف التحريك الهوائي")
+            }
+        }
+        airRow.addView(airToggle, LinearLayout.LayoutParams(0, dp(42), 1f))
+        airRow.addView(actionButton("نقرة / اختيار", 23, true), LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(6) })
+        root.addView(airRow, lp(-1, dp(44)))
+
+        addSectionLabel(root, "لوحة تحريك الإصبع")
         val touchPad = FrameLayout(this).apply {
             setBackgroundColor(0xff1e293b.toInt())
             contentDescription = "لوحة لمس التلفاز؛ انقر على موضع الشاشة لإرسال اللمسة"
@@ -126,42 +157,21 @@ class MainActivity : Activity() {
             setTextColor(0xffcbd5e1.toInt())
         }
         touchPad.addView(touchHint, FrameLayout.LayoutParams(-1, -1))
-        // The TV's EShare build accepts KEYEVENT reliably, but its touch-event
-        // packet format is not confirmed. Use the verified D-pad protocol for
-        // swipe navigation instead of sending the unsupported TOUCHLOGNPRESS.
+        // EShare Air Mouse event: AIRMOUSEEVNET + relative X/Y + state 2.
+        var lastX = 0f
+        var lastY = 0f
         touchPad.setOnTouchListener { view, event ->
-            val threshold = dp(18).toFloat()
             when (event.actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN -> {
-                    view.setTag(intArrayOf(event.x.toInt(), event.y.toInt(), 0, 0, 0))
-                    true
-                }
+                android.view.MotionEvent.ACTION_DOWN -> { lastX = event.x; lastY = event.y; true }
                 android.view.MotionEvent.ACTION_MOVE -> {
-                    val state = view.getTag() as? IntArray
-                    if (state != null) {
-                        state[3] += event.x.toInt() - state[0]
-                        state[4] += event.y.toInt() - state[1]
-                        while (kotlin.math.abs(state[3]) >= threshold) {
-                            sendKey(if (state[3] > 0) 22 else 21) // right / left
-                            state[3] += if (state[3] > 0) -threshold.toInt() else threshold.toInt()
-                            state[2] = 1
-                        }
-                        while (kotlin.math.abs(state[4]) >= threshold) {
-                            sendKey(if (state[4] > 0) 20 else 19) // down / up
-                            state[4] += if (state[4] > 0) -threshold.toInt() else threshold.toInt()
-                            state[2] = 1
-                        }
-                        state[0] = event.x.toInt()
-                        state[1] = event.y.toInt()
-                    }
+                    val dx = event.x - lastX
+                    val dy = event.y - lastY
+                    lastX = event.x
+                    lastY = event.y
+                    if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > 0.8f) sendAirMouse(dx * 1.25f, dy * 1.25f)
                     true
                 }
-                android.view.MotionEvent.ACTION_UP -> {
-                    val state = view.getTag() as? IntArray
-                    if (state == null || state[2] == 0) sendKey(23) // tap = OK/select
-                    view.performClick()
-                    true
-                }
+                android.view.MotionEvent.ACTION_UP -> { view.performClick(); true }
                 android.view.MotionEvent.ACTION_CANCEL -> true
                 else -> true
             }
@@ -417,6 +427,51 @@ class MainActivity : Activity() {
         output = socket.getOutputStream()
         prefs.edit().putString("ip", device.ip).apply()
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
+    }
+
+    private fun startAirMouse() {
+        val sensor = gyroSensor ?: return
+        lastGyroTimestamp = 0L
+        sensorManager.registerListener(gyroListener, sensor, SensorManager.SENSOR_DELAY_GAME)
+    }
+
+    private fun stopAirMouse() {
+        sensorManager.unregisterListener(gyroListener)
+        lastGyroTimestamp = 0L
+    }
+
+    private val gyroListener = object : SensorEventListener {
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        override fun onSensorChanged(event: SensorEvent) {
+            if (!airMouseEnabled || event.sensor.type != Sensor.TYPE_GYROSCOPE) return
+            val now = event.timestamp
+            val previous = lastGyroTimestamp
+            lastGyroTimestamp = now
+            if (previous == 0L) return
+            val dt = ((now - previous) / 1_000_000_000f).coerceIn(0f, 0.05f)
+            val rawX = event.values[2] * dt
+            val rawY = event.values[0] * dt
+            val dx = if (kotlin.math.abs(rawX) < 0.006f) 0f else rawX * 950f * gyroSensitivity
+            val dy = if (kotlin.math.abs(rawY) < 0.006f) 0f else rawY * 950f * gyroSensitivity
+            if (dx != 0f || dy != 0f) sendAirMouse(dx, dy)
+        }
+    }
+
+    private fun sendAirMouse(dx: Float, dy: Float) {
+        io.execute {
+            try {
+                if (tcp?.isConnected != true || tcp?.isClosed != false) {
+                    val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
+                    connect(Device("التلفاز", ip, discoverPort(ip)))
+                }
+                val packet = "AIRMOUSEEVNET\\r\\n$dx\\r\\n$dy\\r\\n2\\r\\n\\r\\n"
+                output?.write(packet.toByteArray(Charsets.UTF_8))
+                output?.flush()
+            } catch (e: Exception) {
+                closeConnection()
+                setStatus("تعذر تحريك الماوس: ${e.message ?: "أعد الاتصال"}")
+            }
+        }
     }
 
     private fun sendKey(key: Int) {
