@@ -141,6 +141,63 @@ class MainActivity : Activity() {
         connection.addView(connectButton, LinearLayout.LayoutParams(dp(82), dp(38)))
         root.addView(connection, lp(-1, dp(38)))
 
+        val touchTitle = TextView(this).apply {
+            text = "لوحة الموس — اسحب بإصبعك لتحريك المؤشر، وانقر للاختيار"
+            textSize = 11f
+            setTextColor(0xffc5d3e5.toInt())
+            gravity = Gravity.CENTER
+        }
+        root.addView(touchTitle, lp(-1, dp(25)))
+
+        val touchPad = FrameLayout(this).apply {
+            background = rounded(panel, 17, 0xff3a526f.toInt())
+            contentDescription = "لوحة تحريك مؤشر التلفاز"
+        }
+        val touchHint = TextView(this).apply {
+            text = "منطقة تحريك المؤشر"
+            textSize = 13f
+            setTextColor(0xff91a4bd.toInt())
+            gravity = Gravity.CENTER
+        }
+        touchPad.addView(touchHint, FrameLayout.LayoutParams(-1, -1))
+        var downX = 0f
+        var downY = 0f
+        var moved = false
+        touchPad.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    downX = event.x
+                    downY = event.y
+                    moved = false
+                    true
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val dx = event.x - downX
+                    val dy = event.y - downY
+                    if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > dp(3)) moved = true
+                    if (moved) {
+                        sendAirMouse(dx * 0.55f, dy * 0.55f)
+                        downX = event.x
+                        downY = event.y
+                    }
+                    true
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    if (!moved) sendKey(23)
+                    view.performClick()
+                    true
+                }
+                android.view.MotionEvent.ACTION_CANCEL -> true
+                else -> true
+            }
+        }
+        root.addView(touchPad, LinearLayout.LayoutParams(-1, 0, 1f).apply {
+            topMargin = dp(2)
+            bottomMargin = dp(4)
+            minHeight = dp(88)
+        })
+
+
         val quick = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -213,61 +270,7 @@ class MainActivity : Activity() {
         mediaButton("صوت +", 24)
         root.addView(media, lp(-1, dp(39)))
 
-        val touchTitle = TextView(this).apply {
-            text = "لوحة الموس — اسحب بإصبعك لتحريك المؤشر، وانقر للاختيار"
-            textSize = 11f
-            setTextColor(0xffc5d3e5.toInt())
-            gravity = Gravity.CENTER
-        }
-        root.addView(touchTitle, lp(-1, dp(25)))
 
-        val touchPad = FrameLayout(this).apply {
-            background = rounded(panel, 17, 0xff3a526f.toInt())
-            contentDescription = "لوحة تحريك مؤشر التلفاز"
-        }
-        val touchHint = TextView(this).apply {
-            text = "منطقة تحريك المؤشر"
-            textSize = 13f
-            setTextColor(0xff91a4bd.toInt())
-            gravity = Gravity.CENTER
-        }
-        touchPad.addView(touchHint, FrameLayout.LayoutParams(-1, -1))
-        var downX = 0f
-        var downY = 0f
-        var moved = false
-        touchPad.setOnTouchListener { view, event ->
-            when (event.actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN -> {
-                    downX = event.x
-                    downY = event.y
-                    moved = false
-                    true
-                }
-                android.view.MotionEvent.ACTION_MOVE -> {
-                    val dx = event.x - downX
-                    val dy = event.y - downY
-                    if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > dp(3)) moved = true
-                    if (moved) {
-                        sendAirMouse(dx * 0.55f, dy * 0.55f)
-                        downX = event.x
-                        downY = event.y
-                    }
-                    true
-                }
-                android.view.MotionEvent.ACTION_UP -> {
-                    if (!moved) sendKey(23)
-                    view.performClick()
-                    true
-                }
-                android.view.MotionEvent.ACTION_CANCEL -> true
-                else -> true
-            }
-        }
-        root.addView(touchPad, LinearLayout.LayoutParams(-1, 0, 1f).apply {
-            topMargin = dp(2)
-            bottomMargin = dp(4)
-            minHeight = dp(88)
-        })
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
