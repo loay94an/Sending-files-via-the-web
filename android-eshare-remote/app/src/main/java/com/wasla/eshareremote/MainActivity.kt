@@ -39,7 +39,9 @@ class MainActivity : Activity() {
     private var airMouseEnabled = false
     private var lastGyroTimestamp = 0L
     @Volatile private var lastAirSendAt = 0L
-    private val gyroSensitivity = 1.0f
+    // Conservative defaults: reduce gyro speed and keep touchpad fine-grained.
+    private val gyroSensitivity = 0.35f
+    private val touchSensitivity = 0.38f
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
@@ -225,7 +227,8 @@ class MainActivity : Activity() {
                         // Scale by the actual touch surface dimensions for consistent travel.
                         val scaleX = 1280f / view.width.coerceAtLeast(1)
                         val scaleY = 720f / view.height.coerceAtLeast(1)
-                        sendAirMouse(dx * scaleX, dy * scaleY)
+                        // Natural pointer mapping: move the finger/device right or down to move the cursor the same way.
+                        sendAirMouse(-dx * scaleX * touchSensitivity, -dy * scaleY * touchSensitivity)
                         downX = event.x; downY = event.y
                     }
                     true
@@ -770,9 +773,9 @@ class MainActivity : Activity() {
             val rawY = event.values[0] * dt
             // Convert angular displacement into EShare logical screen pixels.
             val dx = if (kotlin.math.abs(rawX) < 0.00035f) 0f
-                else (rawX * 1280f * 1.3f * gyroSensitivity).coerceIn(-24f, 24f)
+                else (-rawX * 1280f * 1.3f * gyroSensitivity).coerceIn(-24f, 24f)
             val dy = if (kotlin.math.abs(rawY) < 0.00035f) 0f
-                else (rawY * 720f * 1.6f * gyroSensitivity).coerceIn(-24f, 24f)
+                else (-rawY * 720f * 1.6f * gyroSensitivity).coerceIn(-24f, 24f)
             if (dx != 0f || dy != 0f) sendAirMouse(dx, dy)
         }
     }
