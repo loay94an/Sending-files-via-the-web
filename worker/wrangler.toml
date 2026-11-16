@@ -1,11 +1,14 @@
-name = "direct-transfer-signaling"
+name = "wasla-transfer"
 main = "src/index.js"
-compatibility_date = "2026-11-01"
-
+compatibility_date = "2026-11-16"
+workers_dev = true
+[assets]
+directory = "../"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
 [[durable_objects.bindings]]
 name = "ROOMS"
 class_name = "Room"
-
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room"]
