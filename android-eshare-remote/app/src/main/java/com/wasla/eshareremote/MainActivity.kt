@@ -381,6 +381,12 @@ class MainActivity : Activity() {
         }
 
 
+        // Restore the missing center directional pad in the deck.
+        deck.addView(navArea, LinearLayout.LayoutParams(0, dp(165), 1f).apply {
+            marginStart = dp(2)
+            marginEnd = dp(2)
+        })
+
         val volumeStack = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -427,8 +433,9 @@ class MainActivity : Activity() {
             }
         }
         bottom.addView(airToggle, LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginStart = dp(5) })
-        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(5); bottomMargin = dp(5) })
+        // Put the main navigation keys at the bottom, as requested, with voice/air-mouse below them.
         root.addView(deck, LinearLayout.LayoutParams(-1, dp(174)).apply { topMargin = dp(3) })
+        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(5); bottomMargin = dp(5) })
 
         setContentView(root)
     }
