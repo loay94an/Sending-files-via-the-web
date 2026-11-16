@@ -268,14 +268,14 @@ class MainActivity : Activity() {
             }
             private val line = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                 style = android.graphics.Paint.Style.STROKE
-                strokeWidth = dp(1.5f)
+                strokeWidth = dp(2)
                 color = 0xff477ca8.toInt()
             }
             private val label = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                 color = 0xff8cecff.toInt()
                 textAlign = android.graphics.Paint.Align.CENTER
                 typeface = Typeface.DEFAULT_BOLD
-                textSize = dp(25f).toFloat()
+                textSize = dp(25).toFloat()
             }
             private val centerLabel = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                 color = 0xffffffff.toInt()
