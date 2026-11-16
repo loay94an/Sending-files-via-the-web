@@ -6,6 +6,11 @@ on:
     paths:
       - "android-eshare-remote/**"
       - ".github/workflows/build-eshare-remote.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "android-eshare-remote/**"
+      - ".github/workflows/build-eshare-remote.yml"
   workflow_dispatch:
 
 permissions:
