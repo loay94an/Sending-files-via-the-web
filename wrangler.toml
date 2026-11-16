@@ -1,0 +1,11 @@
+name = "wasla-discovery"
+main = "worker/discovery.js"
+compatibility_date = "2026-11-16"
+
+[[durable_objects.bindings]]
+name = "DISCOVERY"
+class_name = "Discovery"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Discovery"]
