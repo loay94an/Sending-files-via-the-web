@@ -437,7 +437,7 @@ class MainActivity : Activity() {
     }
 
     private fun stopAirMouse() {
-        sensorManager.unregisterListener(gyroListener)
+        if (::sensorManager.isInitialized) sensorManager.unregisterListener(gyroListener)
         lastGyroTimestamp = 0L
     }
 
