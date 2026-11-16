@@ -500,7 +500,7 @@ class MainActivity : Activity() {
                     val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
                     connect(Device("التلفاز", ip, discoverPort(ip)))
                 }
-                val packet = "AIRMOUSEEVNET\\r\\n$dx\\r\\n$dy\\r\\n2\\r\\n\\r\\n"
+                val packet = "AIRMOUSEEVNET\r\n$dx\r\n$dy\r\n2\r\n\r\n"
                 output?.write(packet.toByteArray(Charsets.UTF_8))
                 output?.flush()
             } catch (e: Exception) {
