@@ -81,6 +81,36 @@ class MainActivity : Activity() {
         pad.addView(buttonRow(" ", "▼", " ", null, 20, null))
         root.addView(pad, lp(-1, -2))
 
+        val touchTitle = TextView(this).apply {
+            text = "التحكم باللمس والماوس"
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(0xff102a43.toInt())
+            setPadding(0, dp(14), 0, dp(6))
+        }
+        root.addView(touchTitle, lp(-1, -2))
+        val touchPad = FrameLayout(this).apply {
+            setBackgroundColor(0xffdce8f5.toInt())
+            contentDescription = "لوحة لمس التلفاز؛ انقر على موضع الشاشة لإرسال اللمسة"
+        }
+        val touchHint = TextView(this).apply {
+            text = "المس هنا لتحديد موضع النقر على شاشة التلفاز"
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setTextColor(0xff24415f.toInt())
+        }
+        touchPad.addView(touchHint, FrameLayout.LayoutParams(-1, -1))
+        touchPad.setOnTouchListener { view, event ->
+            if (event.action == android.view.MotionEvent.ACTION_UP) {
+                val x = (event.x / view.width.coerceAtLeast(1) * 1280f).toInt().coerceIn(0, 1279)
+                val y = (event.y / view.height.coerceAtLeast(1) * 720f).toInt().coerceIn(0, 719)
+                sendTouchTap(x, y)
+            }
+            true
+        }
+        root.addView(touchPad, LinearLayout.LayoutParams(-1, dp(190)).apply { bottomMargin = dp(8) })
+
         val actions = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
         actions.addView(actionButton("رجوع", 4), weighted())
         actions.addView(actionButton("الرئيسية", 3), weighted())
@@ -101,7 +131,11 @@ class MainActivity : Activity() {
     }
 
     private fun buttonRow(left: String, middle: String, right: String, leftKey: Int?, midKey: Int, rightKey: Int?): LinearLayout {
-        val row = LinearLayout(this).apply { gravity = Gravity.CENTER }
+        val row = LinearLayout(this).apply {
+            gravity = Gravity.CENTER
+            // Keep physical left/right positions stable inside the Arabic RTL screen.
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
         row.addView(if (leftKey == null) spacer() else actionButton(left, leftKey), weighted())
         row.addView(actionButton(middle, midKey, true), weighted())
         row.addView(if (rightKey == null) spacer() else actionButton(right, rightKey), weighted())
@@ -269,6 +303,24 @@ class MainActivity : Activity() {
         output = socket.getOutputStream()
         prefs.edit().putString("ip", device.ip).apply()
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
+    }
+
+    private fun sendTouchTap(x: Int, y: Int) {
+        io.execute {
+            try {
+                if (tcp?.isConnected != true || tcp?.isClosed != false) {
+                    val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
+                    connect(Device("التلفاز", ip, discoverPort(ip)))
+                }
+                val message = "TOUCHLOGNPRESS\\r\\n[={$x,$y}]\\r\\n\\r\\n"
+                output?.write(message.toByteArray(Charsets.UTF_8))
+                output?.flush()
+                setStatus("تم إرسال اللمسة إلى الشاشة: $x, $y")
+            } catch (e: Exception) {
+                closeConnection()
+                setStatus("تعذر إرسال اللمسة: " + (e.message ?: "أعد الاتصال"))
+            }
+        }
     }
 
     private fun sendKey(key: Int) {
