@@ -246,7 +246,7 @@ class MainActivity : Activity() {
             background = rounded(0xff10223a.toInt(), 30, 0xff247b9c.toInt())
             setPadding(dp(5), dp(5), dp(5), dp(5))
         }
-        fun navButton(symbol: String, key: Int, size: Int, primary: Boolean = false): Button =
+        fun navButton(symbol: String, key: Int?, size: Int, primary: Boolean = false): Button =
             Button(this).apply {
                 text = symbol
                 textSize = if (primary) 17f else 19f
@@ -261,7 +261,7 @@ class MainActivity : Activity() {
                     if (!primary) setStroke(dp(1), 0xff41678b.toInt())
                 }
                 stateListAnimator = null
-                setOnClickListener { sendKey(key) }
+                if (key != null) setOnClickListener { sendKey(key) }
                 layoutParams = LinearLayout.LayoutParams(dp(size), dp(size)).apply {
                     setMargins(dp(2), dp(2), dp(2), dp(2))
                 }
@@ -273,9 +273,9 @@ class MainActivity : Activity() {
                 layoutDirection = View.LAYOUT_DIRECTION_LTR
                 addView(left); addView(center); addView(right)
             }
-        navArea.addView(navRow(navButton(" ", 21, 37), navButton("▲", 19, 42), navButton(" ", 22, 37)))
+        navArea.addView(navRow(navButton(" ", null, 37), navButton("▲", 19, 42), navButton(" ", null, 37)))
         navArea.addView(navRow(navButton("◀", 21, 42), navButton("OK", 23, 54, true), navButton("▶", 22, 42)))
-        navArea.addView(navRow(navButton(" ", 20, 37), navButton("▼", 20, 42), navButton(" ", 20, 37)))
+        navArea.addView(navRow(navButton(" ", null, 37), navButton("▼", 20, 42), navButton(" ", null, 37)))
         deck.addView(navArea, LinearLayout.LayoutParams(0, dp(132), 1f).apply {
             marginStart = dp(2); marginEnd = dp(2)
         })
