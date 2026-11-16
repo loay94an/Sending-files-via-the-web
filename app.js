@@ -205,10 +205,16 @@ async function startLocalJoin(raw){
  if(peer&&!peer.destroyed){toast(lang==='ar'?'أوقف الجلسة الحالية أولًا.':'Stop the current session first.');return}
  localMode=true;$('localJoin').disabled=true;localState(lang==='ar'?'جارٍ الاتصال بالطرف الآخر…':'Connecting to the other device…');
  try{const x=await makePeer();peer=x.p;const conn=peer.connect(id,{reliable:true,serialization:'binary',metadata:{name:deviceName(),kind:deviceLabel()}});activeConnection=conn;
-  conn.on('open',async()=>{if(!(await verifyLocalConnection(conn,25000))){toast(lang==='ar'?'تعذر إثبات مسار مباشر داخل الشبكة المحلية. تأكد من أن نقطة الاتصال تسمح باتصال الأجهزة ببعضها.':'Could not verify a direct local route. Check that the hotspot allows connected devices to communicate.');conn.close();return}
-   conn._waslaLocalVerified=true;localPendingRole='scanner';pendingLocalConnection=conn;$('pairRequestName').textContent=lang==='ar'?'الجهاز الذي أنشأ رمز QR':'Device that created the QR code';$('pairRequest').classList.remove('hidden');localState(lang==='ar'?'تم التحقق من الاتصال المحلي؛ بانتظار موافقتك':'Local connection verified; waiting for your approval',true);toast(lang==='ar'?'تحقق الاتصال؛ اضغط موافقة لبدء النقل.':'Connection verified; approve to start transfer.');  });
+  conn.on('open',()=>{
+   // Ask for the user's approval immediately; verify the direct LAN route only after approval.
+   localPendingRole='scanner';pendingLocalConnection=conn;
+   $('pairRequestName').textContent=lang==='ar'?'الجهاز الذي أنشأ رمز QR':'Device that created the QR code';
+   $('pairRequest').classList.remove('hidden');
+   localState(lang==='ar'?'اتصل الجهاز؛ راجع الطلب واضغط موافقة للمتابعة':'Device connected; review the request and approve to continue',true);
+   toast(lang==='ar'?'وصل طلب اقتران جديد؛ يمكنك الموافقة أو الرفض.':'A pairing request arrived; you can approve or reject it.');
+  });
   conn.on('data',data=>{let handled=false;if(typeof data==='string'){try{const message=JSON.parse(data);if(message.type==='local-status-request'){if(conn._waslaLocalApproved)replyLocalStatus(conn);handled=true}else if(message.type==='local-ready'&&conn._waslaLocalApproved){activateLocalTransferUI();localState(lang==='ar'?'نجح الاقتران المحلي؛ الجهازان جاهزان للإرسال والاستقبال':'Local pairing successful; both devices ready to send and receive',true);toast(lang==='ar'?'تم الاقتران؛ الإرسال والاستقبال متاحان على الجهازين.':'Paired; sending and receiving are ready on both devices.');handled=true}else if(message.type==='chunk-ack'&&conn._waslaAckResolve){const resolve=conn._waslaAckResolve;conn._waslaAckResolve=null;resolve();handled=true}else if(message.type==='done'){toast(tr('sent'));handled=true}}catch(_){}}if(!handled)handleIncoming(data)});
-  conn.on('close',()=>{if(activeConnection===conn)activeConnection=null;closePartial();$('receiveState').textContent=tr('waiting');$('receiveState').classList.remove('online');$('stopReceiver').classList.add('hidden')});
+  conn.on('close',()=>{if(activeConnection===conn)activeConnection=null;if(pendingLocalConnection===conn){pendingLocalConnection=null;localPendingRole='';$('pairRequest').classList.add('hidden')}closePartial();$('receiveState').textContent=tr('waiting');$('receiveState').classList.remove('online');$('stopReceiver').classList.add('hidden');if(localMode)localState(lang==='ar'?'انقطع اتصال الجهاز الآخر':'The other device disconnected')});
   conn.on('error',e=>{console.warn('Local receiver connection',e);toast(lang==='ar'?'تعذر إكمال الاتصال المحلي.':'Could not complete local connection.')});
  }catch(e){console.error(e);localState(lang==='ar'?'تعذر الاتصال':'Connection failed');toast(lang==='ar'?'تعذر الاقتران. أبقِ الإنترنت متاحًا أثناء إنشاء الاتصال.':'Pairing failed. Keep internet available while establishing the connection.')}
  finally{$('localJoin').disabled=false}
