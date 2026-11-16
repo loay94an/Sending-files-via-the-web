@@ -157,7 +157,6 @@ class MainActivity : Activity() {
         quickButton("↶ رجوع", 4, 1.15f)
         quickButton("−", 25)
         quickButton("+", 24)
-        quickButton("⏻", 26)
         root.addView(quick, lp(-1, dp(43)))
 
         val navArea = LinearLayout(this).apply {
