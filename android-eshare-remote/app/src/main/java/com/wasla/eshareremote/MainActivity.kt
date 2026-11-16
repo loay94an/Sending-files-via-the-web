@@ -38,9 +38,12 @@ class MainActivity : Activity() {
     private var gyroSensor: Sensor? = null
     private var airMouseEnabled = false
     private var lastGyroTimestamp = 0L
+    private var smoothedGyroDx = 0f
+    private var smoothedGyroDy = 0f
     @Volatile private var lastAirSendAt = 0L
-    // Conservative defaults: reduce gyro speed and keep touchpad fine-grained.
-    private val gyroSensitivity = 0.35f
+    // Keep air-mouse movement controlled; touchpad sensitivity is independent.
+    private val gyroSensitivity = 0.18f
+    private val gyroSmoothing = 0.32f
     private val touchSensitivity = 0.12f
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
@@ -752,12 +755,16 @@ class MainActivity : Activity() {
     private fun startAirMouse() {
         val sensor = gyroSensor ?: return
         lastGyroTimestamp = 0L
+        smoothedGyroDx = 0f
+        smoothedGyroDy = 0f
         sensorManager.registerListener(gyroListener, sensor, SensorManager.SENSOR_DELAY_GAME)
     }
 
     private fun stopAirMouse() {
         if (::sensorManager.isInitialized) sensorManager.unregisterListener(gyroListener)
         lastGyroTimestamp = 0L
+        smoothedGyroDx = 0f
+        smoothedGyroDy = 0f
     }
 
     private val gyroListener = object : SensorEventListener {
@@ -769,15 +776,20 @@ class MainActivity : Activity() {
             lastGyroTimestamp = now
             if (previous == 0L) return
             val dt = ((now - previous) / 1_000_000_000f).coerceIn(0f, 0.05f)
-            // Ignore sensor noise and clamp each movement step to prevent cursor jumps.
+            // Ignore tiny sensor noise, reduce gain, and cap spikes before smoothing.
             val rawX = event.values[2] * dt
             val rawY = event.values[0] * dt
-            // Convert angular displacement into EShare logical screen pixels.
-            val dx = if (kotlin.math.abs(rawX) < 0.00035f) 0f
-                else (-rawX * 1280f * 1.3f * gyroSensitivity).coerceIn(-24f, 24f)
-            val dy = if (kotlin.math.abs(rawY) < 0.00035f) 0f
-                else (-rawY * 720f * 1.6f * gyroSensitivity).coerceIn(-24f, 24f)
-            if (dx != 0f || dy != 0f) sendAirMouse(dx, dy)
+            val targetDx = if (kotlin.math.abs(rawX) < 0.00035f) 0f
+                else (-rawX * 1280f * 1.3f * gyroSensitivity).coerceIn(-12f, 12f)
+            val targetDy = if (kotlin.math.abs(rawY) < 0.00035f) 0f
+                else (-rawY * 720f * 1.6f * gyroSensitivity).coerceIn(-12f, 12f)
+            // Exponential smoothing reduces jitter while preserving the established direction.
+            smoothedGyroDx += (targetDx - smoothedGyroDx) * gyroSmoothing
+            smoothedGyroDy += (targetDy - smoothedGyroDy) * gyroSmoothing
+            if (kotlin.math.abs(smoothedGyroDx) > 0.015f ||
+                kotlin.math.abs(smoothedGyroDy) > 0.015f) {
+                sendAirMouse(smoothedGyroDx, smoothedGyroDy)
+            }
         }
     }
 
