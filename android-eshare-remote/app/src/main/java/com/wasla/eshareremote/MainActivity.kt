@@ -215,9 +215,7 @@ class MainActivity : Activity() {
                 setStatus(if (airMouseEnabled) "الماوس الهوائي مفعّل — حرّك الهاتف" else "تم إيقاف الماوس الهوائي")
             }
         }
-        airRow.addView(airToggle, LinearLayout.LayoutParams(0, dp(48), 1.35f).apply { marginEnd = dp(6) })
-        airRow.addView(makeButton("نقرة / اختيار", false, 48).apply { setOnClickListener { sendKey(23) } },
-            LinearLayout.LayoutParams(0, dp(48), 1f))
+        airRow.addView(airToggle, LinearLayout.LayoutParams(-1, dp(48)))
         card(root, airRow)
 
         section(root, "لوحة اللمس", "اسحب بإصبعك")
@@ -237,7 +235,7 @@ class MainActivity : Activity() {
         }
         touchContent.addView(touchIcon, lp(-1, dp(42)))
         touchContent.addView(label("منطقة تحريك المؤشر", 12f, 0xffd7e3f3.toInt(), true).apply { gravity = Gravity.CENTER })
-        touchContent.addView(label("اسحب للتحريك  •  انقر للاختيار", 10f, muted).apply { gravity = Gravity.CENTER })
+        touchContent.addView(label("اسحب لتحريك المؤشر • انقر للاختيار أثناء الوضع الهوائي", 10f, muted).apply { gravity = Gravity.CENTER })
         touchPad.addView(touchContent, FrameLayout.LayoutParams(-1, -1))
         var lastX = 0f
         var lastY = 0f
@@ -252,7 +250,7 @@ class MainActivity : Activity() {
                     if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > 0.8f) sendAirMouse(dx * 1.25f, dy * 1.25f)
                     true
                 }
-                android.view.MotionEvent.ACTION_UP -> { sendKey(23); view.performClick(); true }
+                android.view.MotionEvent.ACTION_UP -> { if (airMouseEnabled) sendKey(23); view.performClick(); true }
                 android.view.MotionEvent.ACTION_CANCEL -> true
                 else -> true
             }
