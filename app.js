@@ -1,5 +1,5 @@
 (()=>{'use strict';
-const $=id=>document.getElementById(id);const CHUNK=64*1024;let peer=null,sessionId='',connections=new Map(),files=[],toastTimer,activeConnection=null,transferCancelled=false,wifiPc=null,localMode=false,pendingLocalConnection=null,localHostConnection=null,qrStream=null,qrScanActive=false,localVerifyTimer=null;
+const $=id=>document.getElementById(id);const CHUNK=256*1024;let peer=null,sessionId='',connections=new Map(),files=[],toastTimer,activeConnection=null,transferCancelled=false,wifiPc=null,localMode=false,pendingLocalConnection=null,localHostConnection=null,qrStream=null,qrScanActive=false,localVerifyTimer=null;
 const dict={ar:{storagePick:'اختيار مجلد الحفظ',storageHint:'تُكتب الأجزاء مباشرة في التخزين، دون تجميع الملف في الذاكرة.',peer:'اتصال مباشر بين الأجهزة',eyebrow:'نقل بسيط. اتصال مباشر.',headline:'أرسل ملفاتك<br><em>بلا تعقيد.</em>',intro:'أنشئ جلسة، شارك الرابط، وانقل ملفاتك مباشرة بين الأجهزة.',sendTab:'إرسال ملفات',receiveTab:'استقبال ملفات',sendTitle:'أنشئ جلسة إرسال',notReady:'غير متصل',sendHint:'ابدأ جلسة مؤقتة، ثم أرسل رابطها إلى الجهاز المستقبل.',create:'إنشاء جلسة ورابط',shareLink:'رابط الانضمام',copy:'نسخ',sessionCode:'رمز الجلسة',copyCode:'نسخ الرمز',chooseFiles:'اختر الملفات',dropTitle:'أضف الملفات للإرسال',dropHint:'اضغط للاختيار أو اسحب الملفات إلى هنا',multiHint:'يمكنك اختيار عدة ملفات',sendNow:'إرسال الملفات إلى الأجهزة المتصلة',receiveTitle:'انضم إلى جلسة',waiting:'بانتظار الاتصال',receiveHint:'افتح رابط المرسل، أو أدخل رمز الجلسة الذي وصلك.',roomCode:'رمز الجلسة أو رابطها',join:'اتصال',receiving:'جارٍ استقبال الملفات',f1title:'من جهاز إلى جهاز',f1text:'الملفات تنتقل عبر اتصال WebRTC بين الطرفين متى أمكن.',f2title:'رابط ورمز QR',f2text:'شارك الجلسة بالرابط أو امسح الرمز من الجهاز الآخر.',f3title:'مناسب للشاشات والريموت',f3text:'عناصر كبيرة وتنقل واضح بلوحة المفاتيح.',footer:'وصلة — لا يتطلب تثبيت تطبيق.',footnote:'لا تغلق الصفحة أثناء النقل.',connected:'متصل',connecting:'جارٍ الاتصال',noPeers:'لا يوجد جهاز مستقبل متصل بعد.',selectFirst:'اختر ملفًا واحدًا على الأقل.',sent:'اكتمل الإرسال.',received:'اكتمل الاستقبال — تنزيل الملف جاهز.',copied:'تم النسخ.',badCode:'أدخل رمز جلسة صحيحًا أو رابطًا صالحًا.',peerMissing:'تعذر تحميل مكتبة الاتصال. تحقق من الإنترنت ثم أعد تحميل الصفحة.',peerError:'تعذر الاتصال بخدمة PeerJS. حاول مجددًا بعد قليل.',joined:'تم الاتصال بالمرسل.',disconnected:'انقطع اتصال أحد الأجهزة.',file:'ملف',files:'ملفات',total:'الإجمالي',failed:'تعذر إرسال بعض الملفات.',sendTo:'إرسال إلى',joining:'جارٍ الانضمام إلى الجلسة…',stop:'إيقاف الاتصال',stopped:'تم إيقاف الاتصال.',cancelled:'أُوقف النقل.',fileTooLarge:'تعذر تجهيز الملف في ذاكرة هذا المتصفح.'},en:{storagePick:'Choose save folder',storageHint:'Chunks are written directly to storage without assembling the file in memory.',peer:'Direct device connection',eyebrow:'Simple transfer. Direct connection.',headline:'Send your files<br><em>without the hassle.</em>',intro:'Create a session, share its link, and transfer files between devices.',sendTab:'Send files',receiveTab:'Receive files',sendTitle:'Create a sending session',notReady:'Offline',sendHint:'Start a temporary session, then share its link with the receiving device.',create:'Create session & link',shareLink:'Join link',copy:'Copy',sessionCode:'Session code',copyCode:'Copy code',chooseFiles:'Choose files',dropTitle:'Add files to send',dropHint:'Tap to choose or drag files here',multiHint:'You can select multiple files',sendNow:'Send files to connected devices',receiveTitle:'Join a session',waiting:'Waiting for connection',receiveHint:'Open the sender link or enter the session code you received.',roomCode:'Session code or link',join:'Connect',receiving:'Receiving files',f1title:'Device to device',f1text:'Files travel over a WebRTC peer connection when possible.',f2title:'Link and QR code',f2text:'Share the session link or scan its QR code.',f3title:'TV and remote friendly',f3text:'Large controls and clear keyboard navigation.',footer:'Wasla — no app installation required.',footnote:'Keep this page open during transfer.',connected:'Connected',connecting:'Connecting',noPeers:'No receiving device is connected yet.',selectFirst:'Choose at least one file.',sent:'Transfer complete.',received:'Transfer complete — download is ready.',copied:'Copied.',badCode:'Enter a valid session code or link.',peerMissing:'Connection library failed to load. Check your internet and reload.',peerError:'Could not reach PeerJS. Please try again shortly.',joined:'Connected to sender.',disconnected:'A device disconnected.',file:'file',files:'files',total:'Total',failed:'Some files could not be sent.',sendTo:'Send to',joining:'Joining session…',stop:'Stop connection',stopped:'Connection stopped.',cancelled:'Transfer stopped.',fileTooLarge:'This browser could not prepare the file in available memory.'}};
 let lang='ar';
 function tr(k){return dict[lang][k]||k}function toast(s){const el=$('toast');el.textContent=s;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),2800)}
@@ -84,6 +84,7 @@ async function createIncomingTarget(meta){
  }
  return createIndexedDbTarget(name,meta.mime);
 }
+async function flushIncomingBuffer(target=incoming){if(!target||!target.pendingBytes)return;const parts=target.pendingParts;target.pendingParts=[];target.pendingBytes=0;await target.writer.write(new Blob(parts));}
 async function processIncoming(data){
  if(data instanceof Blob)data=await data.arrayBuffer();
  if(typeof data==='string'){
@@ -93,12 +94,12 @@ async function processIncoming(data){
    const meta={id:m.id,name:m.name,size:Number(m.size),mime:m.mime||'application/octet-stream'};
    if(!Number.isFinite(meta.size)||meta.size<0)throw Error('BAD_SIZE');
    const target=await createIncomingTarget(meta);
-   incoming={...meta,...target,received:0};
+   incoming={...meta,...target,received:0,pendingParts:[],pendingBytes:0};
    $('receiveProgress').classList.remove('hidden');$('receiveStatus').textContent=meta.name;$('receivePercent').textContent='0%';$('receiveBar').style.width='0%';
    $('storageStatus').textContent=target.kind==='device'?(lang==='ar'?'يُكتب مباشرة في مجلد الهاتف':'Writing directly to device folder'):target.kind==='indexeddb'?(lang==='ar'?'يُحفظ تدريجيًا في قاعدة بيانات المتصفح، ثم يظهر رابط التنزيل بعد اكتمال الملف':'Saved incrementally in browser storage; a download link appears when complete'):(lang==='ar'?'يُكتب تدريجيًا في التخزين المحلي للموقع':'Writing incrementally to local site storage');
   }else if(m.type==='file-end'&&incoming&&m.id===incoming.id){
    if(incoming.received!==incoming.size)throw Error('SIZE_MISMATCH');
-   const done=incoming;incoming=null;
+   const done=incoming;await flushIncomingBuffer(done);incoming=null;
    await done.writer.close();
    const file=await done.handle.getFile();
    const item=document.createElement('div');item.className='file-item';
@@ -115,8 +116,8 @@ async function processIncoming(data){
  if(data instanceof ArrayBuffer||ArrayBuffer.isView(data)){
   if(!incoming)return;
   const part=data instanceof ArrayBuffer?data:data.buffer.slice(data.byteOffset,data.byteOffset+data.byteLength);
-  await incoming.writer.write(part);
-  incoming.received+=part.byteLength;
+  incoming.pendingParts.push(part);incoming.pendingBytes+=part.byteLength;incoming.received+=part.byteLength;
+  if(incoming.pendingBytes>=1024*1024)await flushIncomingBuffer(incoming);
   const pct=incoming.size?Math.min(100,Math.round(incoming.received/incoming.size*100)):100;
   $('receivePercent').textContent=pct+'%';$('receiveBar').style.width=pct+'%';
  }
