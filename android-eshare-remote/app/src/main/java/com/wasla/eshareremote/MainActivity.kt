@@ -120,7 +120,7 @@ class MainActivity : Activity() {
             contentDescription = "لوحة لمس التلفاز؛ انقر على موضع الشاشة لإرسال اللمسة"
         }
         val touchHint = TextView(this).apply {
-            text = "المس هنا للتحكم بمؤشر التلفاز"
+            text = "اسحب لتحريك التحديد • انقر للاختيار"
             textSize = 12f
             gravity = Gravity.CENTER
             setTextColor(0xffcbd5e1.toInt())
@@ -133,28 +133,26 @@ class MainActivity : Activity() {
             val threshold = dp(18).toFloat()
             when (event.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
-                    view.setTag(intArrayOf(event.x.toInt(), event.y.toInt(), 0, 0))
+                    view.setTag(intArrayOf(event.x.toInt(), event.y.toInt(), 0, 0, 0))
                     true
                 }
                 android.view.MotionEvent.ACTION_MOVE -> {
                     val state = view.getTag() as? IntArray
                     if (state != null) {
-                        var dx = event.x.toInt() - state[0]
-                        var dy = event.y.toInt() - state[1]
-                        var moved = false
-                        while (kotlin.math.abs(dx) >= threshold) {
-                            sendKey(if (dx > 0) 22 else 21) // right / left
-                            dx += if (dx > 0) -threshold.toInt() else threshold.toInt()
-                            moved = true
+                        state[3] += event.x.toInt() - state[0]
+                        state[4] += event.y.toInt() - state[1]
+                        while (kotlin.math.abs(state[3]) >= threshold) {
+                            sendKey(if (state[3] > 0) 22 else 21) // right / left
+                            state[3] += if (state[3] > 0) -threshold.toInt() else threshold.toInt()
+                            state[2] = 1
                         }
-                        while (kotlin.math.abs(dy) >= threshold) {
-                            sendKey(if (dy > 0) 20 else 19) // down / up
-                            dy += if (dy > 0) -threshold.toInt() else threshold.toInt()
-                            moved = true
+                        while (kotlin.math.abs(state[4]) >= threshold) {
+                            sendKey(if (state[4] > 0) 20 else 19) // down / up
+                            state[4] += if (state[4] > 0) -threshold.toInt() else threshold.toInt()
+                            state[2] = 1
                         }
                         state[0] = event.x.toInt()
                         state[1] = event.y.toInt()
-                        if (moved) state[2] = 1
                     }
                     true
                 }
