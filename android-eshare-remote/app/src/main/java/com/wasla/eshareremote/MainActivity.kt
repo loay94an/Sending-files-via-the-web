@@ -303,7 +303,6 @@ class MainActivity : Activity() {
     private fun discover(): Device {
         val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         val dhcp = wifi.dhcpInfo
-        // Keep Android Wi-Fi broadcast/multicast discovery packets available.
         try {
             discoveryLock?.let { if (it.isHeld) it.release() }
             discoveryLock = wifi.createMulticastLock("wasla-eshare-discovery").apply {
@@ -312,24 +311,56 @@ class MainActivity : Activity() {
             }
         } catch (_: Exception) { }
 
-        // Reuse the last successful device first; no address entry is required.
         val saved = prefs.getString("ip", null)
         if (!saved.isNullOrBlank() && isControlPortOpen(saved, 8121)) {
             return Device("التلفاز المحفوظ", saved, 8121)
         }
 
-        val broadcast = if (dhcp.ipAddress != 0 && dhcp.netmask != 0) {
-            val b = (dhcp.ipAddress and dhcp.netmask) or dhcp.netmask.inv()
-            InetAddress.getByAddress(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(b).array())
-        } else InetAddress.getByName("255.255.255.255")
+        data class Subnet(val local: InetAddress, val broadcast: InetAddress, val prefix: Int)
+        val subnets = mutableListOf<Subnet>()
+        if (dhcp.ipAddress != 0 && dhcp.netmask != 0) {
+            try {
+                val local = InetAddress.getByAddress(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(dhcp.ipAddress).array())
+                val mask = dhcp.netmask
+                val prefix = Integer.bitCount(mask)
+                val b = (dhcp.ipAddress and mask) or mask.inv()
+                val broadcast = InetAddress.getByAddress(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(b).array())
+                subnets.add(Subnet(local, broadcast, prefix))
+            } catch (_: Exception) { }
+        }
 
+        // Android hotspot interfaces are often absent from WifiManager.dhcpInfo.
         try {
-            DatagramSocket(48689).use { udp ->
-                udp.broadcast = true
-                udp.soTimeout = 700
-                val bytes = packet()
-                udp.send(DatagramPacket(bytes, bytes.size, broadcast, 48689))
-                val buffer = ByteArray(1024)
+            val interfaces = java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces())
+                .sortedByDescending { it.name.contains("wlan", true) || it.name.contains("ap", true) || it.name.contains("wifi", true) }
+            for (networkInterface in interfaces) {
+                if (!networkInterface.isUp || networkInterface.isLoopback) continue
+                for (entry in networkInterface.interfaceAddresses) {
+                    val local = entry.address
+                    val broadcast = entry.broadcast
+                    if (local !is java.net.Inet4Address || local.isLoopbackAddress || broadcast == null) continue
+                    if (subnets.none { it.local.hostAddress == local.hostAddress }) {
+                        subnets.add(Subnet(local, broadcast, entry.networkPrefixLength.toInt()))
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+
+        // Broadcast discovery through every active IPv4 interface, including phone hotspot.
+        try {
+            val bytes = packet()
+            val udp = DatagramSocket(null)
+            udp.reuseAddress = true
+            udp.bind(InetSocketAddress(48689))
+            udp.broadcast = true
+            udp.soTimeout = 500
+            try {
+                val targets = (subnets.map { it.broadcast } + InetAddress.getByName("255.255.255.255"))
+                    .distinctBy { it.hostAddress }
+                for (target in targets) {
+                    try { udp.send(DatagramPacket(bytes, bytes.size, target, 48689)) } catch (_: Exception) { }
+                }
+                val buffer = ByteArray(2048)
                 val deadline = System.currentTimeMillis() + 3500
                 while (System.currentTimeMillis() < deadline) {
                     try {
@@ -351,41 +382,42 @@ class MainActivity : Activity() {
                         }
                     } catch (_: java.net.SocketTimeoutException) { }
                 }
+            } finally {
+                udp.close()
             }
         } catch (_: Exception) { }
 
-        // Some firmware does not answer UDP discovery. Locate its known working
-        // TCP control service on the local Wi-Fi subnet instead.
-        setStatus("لم يرد اكتشاف UDP؛ جارٍ البحث عن التلفاز داخل شبكة Wi-Fi...")
-        if (dhcp.ipAddress != 0 && dhcp.netmask != 0) {
-            val local = dhcp.ipAddress
-            val mask = dhcp.netmask
+        setStatus("لم يرد اكتشاف UDP؛ جارٍ فحص عناوين شبكة الهاتف ونقطة الاتصال...")
+        val found = java.util.concurrent.atomic.AtomicReference<Device?>(null)
+        val pool = Executors.newFixedThreadPool(48)
+        val tasks = mutableListOf<java.util.concurrent.Future<*>>()
+        for (subnet in subnets) {
+            val prefix = subnet.prefix.coerceIn(1, 30).let { if (it < 23) 24 else it }
+            val local = ByteBuffer.wrap(subnet.local.address).order(ByteOrder.LITTLE_ENDIAN).int
+            val mask = -1 shl (32 - prefix)
             val network = local and mask
             val broadcastIp = network or mask.inv()
-            val found = java.util.concurrent.atomic.AtomicReference<Device?>(null)
-            val pool = Executors.newFixedThreadPool(32)
-            val tasks = (network + 1 until broadcastIp).filter { it != local }.map { host ->
-                pool.submit {
-                    if (found.get() == null) {
-                        val ip = listOf(host and 255, (host ushr 8) and 255, (host ushr 16) and 255, (host ushr 24) and 255).joinToString(".")
-                        if (isControlPortOpen(ip, 8121)) {
-                            found.compareAndSet(null, Device("تلفاز EShare", ip, 8121))
-                        }
+            for (host in (network + 1) until broadcastIp) {
+                if (host == local || found.get() != null) continue
+                val ip = listOf(host and 255, (host ushr 8) and 255, (host ushr 16) and 255, (host ushr 24) and 255).joinToString(".")
+                tasks.add(pool.submit {
+                    if (found.get() == null && isControlPortOpen(ip, 8121)) {
+                        found.compareAndSet(null, Device("تلفاز EShare", ip, 8121))
                     }
-                }
-            }
-            val deadline = System.currentTimeMillis() + 6500
-            while (System.currentTimeMillis() < deadline && found.get() == null && tasks.any { !it.isDone }) {
-                Thread.sleep(80)
-            }
-            pool.shutdownNow()
-            found.get()?.let { device ->
-                prefs.edit().putString("ip", device.ip).apply()
-                runOnUiThread { ipInput.setText(device.ip) }
-                return device
+                })
             }
         }
-        throw IllegalStateException("لم يتم العثور على تلفاز EShare. تأكد أن الهاتف والتلفاز على شبكة Wi-Fi نفسها، أو أدخل IP التلفاز يدوياً ثم اضغط اتصال. منفذ التحكم المتوقع 8121.")
+        val deadline = System.currentTimeMillis() + 9000
+        while (System.currentTimeMillis() < deadline && found.get() == null && tasks.any { !it.isDone }) {
+            Thread.sleep(80)
+        }
+        pool.shutdownNow()
+        found.get()?.let { device ->
+            prefs.edit().putString("ip", device.ip).apply()
+            runOnUiThread { ipInput.setText(device.ip) }
+            return device
+        }
+        throw IllegalStateException("لم يتم العثور على تلفاز EShare. تأكد أن التلفاز متصل بنقطة اتصال الهاتف، أو أدخل عنوان IP الظاهر للتلفاز يدوياً.")
     }
 
     private fun isControlPortOpen(ip: String, port: Int): Boolean {
