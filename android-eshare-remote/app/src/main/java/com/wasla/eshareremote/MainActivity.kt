@@ -39,7 +39,7 @@ class MainActivity : Activity() {
     private var airMouseEnabled = false
     private var lastGyroTimestamp = 0L
     @Volatile private var lastAirSendAt = 0L
-    private val gyroSensitivity = 0.22f
+    private val gyroSensitivity = 1.0f
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
@@ -221,7 +221,11 @@ class MainActivity : Activity() {
                     val dy = event.y - downY
                     if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > dp(3)) moved = true
                     if (moved) {
-                        sendAirMouse(dx * 0.82f, dy * 0.82f)
+                        // EShare maps pointer deltas to a 1280x720 logical surface.
+                        // Scale by the actual touch surface dimensions for consistent travel.
+                        val scaleX = 1280f / view.width.coerceAtLeast(1)
+                        val scaleY = 720f / view.height.coerceAtLeast(1)
+                        sendAirMouse(dx * scaleX, dy * scaleY)
                         downX = event.x; downY = event.y
                     }
                     true
@@ -764,8 +768,11 @@ class MainActivity : Activity() {
             // Ignore sensor noise and clamp each movement step to prevent cursor jumps.
             val rawX = event.values[2] * dt
             val rawY = event.values[0] * dt
-            val dx = if (kotlin.math.abs(rawX) < 0.0012f) 0f else (rawX * 180f * gyroSensitivity).coerceIn(-4f, 4f)
-            val dy = if (kotlin.math.abs(rawY) < 0.0012f) 0f else (rawY * 180f * gyroSensitivity).coerceIn(-4f, 4f)
+            // Convert angular displacement into EShare logical screen pixels.
+            val dx = if (kotlin.math.abs(rawX) < 0.00035f) 0f
+                else (rawX * 1280f * 1.3f * gyroSensitivity).coerceIn(-24f, 24f)
+            val dy = if (kotlin.math.abs(rawY) < 0.00035f) 0f
+                else (rawY * 720f * 1.6f * gyroSensitivity).coerceIn(-24f, 24f)
             if (dx != 0f || dy != 0f) sendAirMouse(dx, dy)
         }
     }
@@ -795,9 +802,14 @@ class MainActivity : Activity() {
                 connect(Device("التلفاز", ip, discoverPort(ip)))
             }
             if (delta.first != 0f || delta.second != 0f) {
-                val packet = "AIRMOUSEEVNET\\r\\n${delta.first}\\r\\n${delta.second}\\r\\n2\\r\\n\\r\\n"
+                // Match the original EShare client's CRLF framing and 55 ms move interval.
+                val now = System.currentTimeMillis()
+                val waitMs = 55L - (now - lastAirSendAt)
+                if (waitMs > 0L) Thread.sleep(waitMs)
+                val packet = "AIRMOUSEEVNET\r\n${delta.first}\r\n${delta.second}\r\n2\r\n\r\n"
                 output?.write(packet.toByteArray(Charsets.UTF_8))
                 output?.flush()
+                lastAirSendAt = System.currentTimeMillis()
             }
         } catch (e: Exception) {
             closeConnection()
