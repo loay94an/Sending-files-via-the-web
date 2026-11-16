@@ -2,7 +2,7 @@ name: Build Wasla EShare Remote APK
 
 on:
   push:
-    branches: [feat/eshare-arabic-remote]
+    branches: [feat/eshare-arabic-remote, fix/eshare-hotspot-airmouse]
     paths:
       - "android-eshare-remote/**"
       - ".github/workflows/build-eshare-remote.yml"
