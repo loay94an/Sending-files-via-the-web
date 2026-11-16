@@ -220,7 +220,7 @@ class MainActivity : Activity() {
             layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
 
-        fun sidePanel(buttons: List<Pair<String, Int>>, width: Int) = LinearLayout(this).apply {
+        fun sidePanel(buttons: List<Pair<String, Int>>) = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             background = rounded(0xff10243d.toInt(), 24, 0xff294d70.toInt())
@@ -236,7 +236,7 @@ class MainActivity : Activity() {
             }
         }
 
-        deck.addView(sidePanel(listOf("🔊  + " to 24, "🔉  −" to 25), 0),
+        deck.addView(sidePanel(listOf("🔊  + " to 24, "🔉  −" to 25)),
             LinearLayout.LayoutParams(dp(76), dp(132)).apply { marginEnd = dp(7) })
 
         val navArea = LinearLayout(this).apply {
@@ -280,7 +280,7 @@ class MainActivity : Activity() {
             marginStart = dp(2); marginEnd = dp(2)
         })
 
-        deck.addView(sidePanel(listOf("⏻" to 26, "🔇" to 164), 0),
+        deck.addView(sidePanel(listOf("⏻" to 26, "🔇" to 164)),
             LinearLayout.LayoutParams(dp(76), dp(132)).apply { marginStart = dp(7) })
         root.addView(deck, lp(-1, dp(140)))
 
