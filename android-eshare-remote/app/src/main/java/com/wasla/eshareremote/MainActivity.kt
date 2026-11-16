@@ -35,7 +35,7 @@ class MainActivity : Activity() {
     private var airMouseEnabled = false
     private var lastGyroTimestamp = 0L
     @Volatile private var lastAirSendAt = 0L
-    private val gyroSensitivity = 1.8f
+    private val gyroSensitivity = 0.22f
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
@@ -248,7 +248,7 @@ class MainActivity : Activity() {
                     val dx = event.x - downX
                     val dy = event.y - downY
                     if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > dp(3)) moved = true
-                    if (moved && !airMouseEnabled) {
+                    if (moved) {
                         sendAirMouse(dx * 0.55f, dy * 0.55f)
                         downX = event.x
                         downY = event.y
@@ -563,15 +563,15 @@ class MainActivity : Activity() {
             // Ignore sensor noise and clamp each movement step to prevent cursor jumps.
             val rawX = event.values[2] * dt
             val rawY = event.values[0] * dt
-            val dx = if (kotlin.math.abs(rawX) < 0.025f) 0f else (rawX * 620f * gyroSensitivity).coerceIn(-18f, 18f)
-            val dy = if (kotlin.math.abs(rawY) < 0.025f) 0f else (rawY * 620f * gyroSensitivity).coerceIn(-18f, 18f)
+            val dx = if (kotlin.math.abs(rawX) < 0.0012f) 0f else (rawX * 180f * gyroSensitivity).coerceIn(-4f, 4f)
+            val dy = if (kotlin.math.abs(rawY) < 0.0012f) 0f else (rawY * 180f * gyroSensitivity).coerceIn(-4f, 4f)
             if (dx != 0f || dy != 0f) sendAirMouse(dx, dy)
         }
     }
 
     private fun sendAirMouse(dx: Float, dy: Float) {
         val now = System.currentTimeMillis()
-        if (now - lastAirSendAt < 55L) return
+        if (now - lastAirSendAt < 35L) return
         lastAirSendAt = now
         io.execute {
             try {
