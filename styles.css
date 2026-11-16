@@ -19,3 +19,12 @@
 #localPairCode{overflow-wrap:anywhere;word-break:break-word;}
 #localVerifyPair{display:block;position:relative;clear:both;margin-top:14px;}
 @media(max-width:420px){#localPairArea .share-bottom{flex-direction:column;align-items:center;gap:12px;}#localQr{width:206px;height:206px;min-width:206px;flex:0 0 206px;}#localQr canvas,#localQr img{width:190px!important;height:190px!important;}#localPairArea .share-code{width:100%;text-align:center;justify-items:center;}}
+
+
+/* Match internet-session QR layout to the local Wi-Fi pairing card. */
+#shareArea .share-bottom{align-items:center;min-width:0;flex-wrap:wrap;margin:14px 0 18px;}
+#qrCode{box-sizing:border-box;width:206px;height:206px;min-width:206px;flex:0 0 206px;overflow:hidden;padding:8px;display:grid;place-items:center;}
+#qrCode canvas,#qrCode img{display:block;width:190px!important;height:190px!important;max-width:100%;max-height:100%;object-fit:contain;}
+#shareArea .share-code{min-width:0;}
+#sessionCode{overflow-wrap:anywhere;word-break:break-word;}
+@media(max-width:420px){#shareArea .share-bottom{flex-direction:column;align-items:center;gap:12px;}#qrCode{width:206px;height:206px;min-width:206px;flex:0 0 206px;}#qrCode canvas,#qrCode img{width:190px!important;height:190px!important;}#shareArea .share-code{width:100%;text-align:center;justify-items:center;}}
