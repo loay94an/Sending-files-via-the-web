@@ -25,6 +25,7 @@ class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
     private var tcp: Socket? = null
     private var output: OutputStream? = null
+    private var discoveryLock: WifiManager.MulticastLock? = null
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
@@ -72,7 +73,7 @@ class MainActivity : Activity() {
         }
         root.addView(status, lp(-1, -2))
         ipInput = EditText(this).apply {
-            hint = "عنوان التلفاز (اختياري)"
+            hint = "عنوان IP للتلفاز (مثال: 10.157.171.193)"
             textSize = 15f
             setSingleLine(true)
             inputType =  android.text.InputType.TYPE_CLASS_TEXT
@@ -198,6 +199,8 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 setStatus("تعذر الاتصال: ${e.message ?: "تحقق من Wi-Fi"}")
             } finally {
+                try { discoveryLock?.let { if (it.isHeld) it.release() } } catch (_: Exception) { }
+                discoveryLock = null
                 runOnUiThread { connectButton.isEnabled = true }
             }
         }
@@ -215,6 +218,14 @@ class MainActivity : Activity() {
     private fun discover(): Device {
         val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         val dhcp = wifi.dhcpInfo
+        // Keep Android Wi-Fi broadcast/multicast discovery packets available.
+        try {
+            discoveryLock?.let { if (it.isHeld) it.release() }
+            discoveryLock = wifi.createMulticastLock("wasla-eshare-discovery").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (_: Exception) { }
 
         // Reuse the last successful device first; no address entry is required.
         val saved = prefs.getString("ip", null)
@@ -289,7 +300,7 @@ class MainActivity : Activity() {
                 return device
             }
         }
-        throw IllegalStateException("لم يتم العثور على تلفاز EShare على شبكة Wi-Fi نفسها")
+        throw IllegalStateException("لم يتم العثور على تلفاز EShare. تأكد أن الهاتف والتلفاز على شبكة Wi-Fi نفسها، أو أدخل IP التلفاز يدوياً ثم اضغط اتصال. منفذ التحكم المتوقع 8121.")
     }
 
     private fun isControlPortOpen(ip: String, port: Int): Boolean {
