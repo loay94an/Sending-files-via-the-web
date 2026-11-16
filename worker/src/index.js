@@ -24,7 +24,6 @@ export class Room{
   ws.addEventListener('message',e=>this.onMessage(peerId,e.data));
   ws.addEventListener('close',()=>this.remove(peerId));ws.addEventListener('error',()=>this.remove(peerId));
   ws.send(JSON.stringify({type:'ready',peerId,expires:meta.expires}));
-  if(role==='receiver'&&this.senderId)this.send(this.senderId,{type:'join-request',peerId,device:'New device'});
   return new Response(null,{status:101,webSocket:client});
  }
  send(id,msg){const p=this.sockets.get(id);if(p?.ws.readyState===1)p.ws.send(JSON.stringify(msg))}
