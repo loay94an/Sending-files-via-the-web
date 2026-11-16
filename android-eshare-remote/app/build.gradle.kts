@@ -3,6 +3,14 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val versionProperties = java.util.Properties().apply {
+    file("../version.properties").inputStream().use { load(it) }
+}
+val appVersionName = versionProperties.getProperty("VERSION_NAME")
+    ?: error("VERSION_NAME is missing from version.properties")
+val appVersionCode = versionProperties.getProperty("VERSION_CODE")?.toIntOrNull()
+    ?: error("VERSION_CODE must be an integer in version.properties")
+
 android {
     namespace = "com.wasla.eshareremote"
     compileSdk = 35
@@ -11,8 +19,8 @@ android {
         applicationId = "com.wasla.eshareremote"
         minSdk = 23
         targetSdk = 28
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     compileOptions {
