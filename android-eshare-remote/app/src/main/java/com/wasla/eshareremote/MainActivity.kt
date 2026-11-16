@@ -64,7 +64,7 @@ class MainActivity : Activity() {
         ipInput = EditText(this).apply {
             hint = "عنوان التلفاز (اختياري)"
             textSize = 15f
-            singleLine = true
+            setSingleLine(true)
             inputType =  android.text.InputType.TYPE_CLASS_TEXT
             layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
