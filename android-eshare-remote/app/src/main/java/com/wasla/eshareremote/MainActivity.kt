@@ -152,38 +152,92 @@ class MainActivity : Activity() {
     private fun discover(): Device {
         val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         val dhcp = wifi.dhcpInfo
+
+        // Reuse the last successful device first; no address entry is required.
+        val saved = prefs.getString("ip", null)
+        if (!saved.isNullOrBlank() && isControlPortOpen(saved, 8121)) {
+            return Device("التلفاز المحفوظ", saved, 8121)
+        }
+
         val broadcast = if (dhcp.ipAddress != 0 && dhcp.netmask != 0) {
             val b = (dhcp.ipAddress and dhcp.netmask) or dhcp.netmask.inv()
             InetAddress.getByAddress(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(b).array())
         } else InetAddress.getByName("255.255.255.255")
 
-        DatagramSocket(48689).use { udp ->
-            udp.broadcast = true
-            udp.soTimeout = 900
-            val bytes = packet()
-            udp.send(DatagramPacket(bytes, bytes.size, broadcast, 48689))
-            val buffer = ByteArray(1024)
-            val deadline = System.currentTimeMillis() + 5000
-            while (System.currentTimeMillis() < deadline) {
-                try {
-                    val response = DatagramPacket(buffer, buffer.size)
-                    udp.receive(response)
-                    val text = String(response.data, 0, response.length, Charsets.UTF_8)
-                    if (text.startsWith("ECloudBox")) {
-                        val fields = text.split(":")
-                        if (fields.size >= 4) {
-                            val device = Device(fields[1], response.address.hostAddress ?: return@use Device(fields[1], "", fields[2].toInt()), fields[2].toInt())
-                            prefs.edit().putString("ip", device.ip).apply()
-                            runOnUiThread { ipInput.setText(device.ip) }
-                            return device
+        try {
+            DatagramSocket(48689).use { udp ->
+                udp.broadcast = true
+                udp.soTimeout = 700
+                val bytes = packet()
+                udp.send(DatagramPacket(bytes, bytes.size, broadcast, 48689))
+                val buffer = ByteArray(1024)
+                val deadline = System.currentTimeMillis() + 3500
+                while (System.currentTimeMillis() < deadline) {
+                    try {
+                        val response = DatagramPacket(buffer, buffer.size)
+                        udp.receive(response)
+                        val text = String(response.data, 0, response.length, Charsets.UTF_8)
+                        if (text.startsWith("ECloudBox")) {
+                            val fields = text.split(":")
+                            if (fields.size >= 3) {
+                                val port = fields[2].toIntOrNull()
+                                val ip = response.address.hostAddress
+                                if (port != null && !ip.isNullOrBlank()) {
+                                    val device = Device(fields.getOrElse(1) { "EShare" }, ip, port)
+                                    prefs.edit().putString("ip", ip).apply()
+                                    runOnUiThread { ipInput.setText(ip) }
+                                    return device
+                                }
+                            }
+                        }
+                    } catch (_: java.net.SocketTimeoutException) { }
+                }
+            }
+        } catch (_: Exception) { }
+
+        // Some firmware does not answer UDP discovery. Locate its known working
+        // TCP control service on the local Wi-Fi subnet instead.
+        setStatus("لم يرد اكتشاف UDP؛ جارٍ البحث عن التلفاز داخل شبكة Wi-Fi...")
+        if (dhcp.ipAddress != 0 && dhcp.netmask != 0) {
+            val local = dhcp.ipAddress
+            val mask = dhcp.netmask
+            val network = local and mask
+            val broadcastIp = network or mask.inv()
+            val found = java.util.concurrent.atomic.AtomicReference<Device?>(null)
+            val pool = Executors.newFixedThreadPool(32)
+            val tasks = (network + 1 until broadcastIp).filter { it != local }.map { host ->
+                pool.submit {
+                    if (found.get() == null) {
+                        val ip = listOf(host and 255, (host ushr 8) and 255, (host ushr 16) and 255, (host ushr 24) and 255).joinToString(".")
+                        if (isControlPortOpen(ip, 8121)) {
+                            found.compareAndSet(null, Device("تلفاز EShare", ip, 8121))
                         }
                     }
-                } catch (_: java.net.SocketTimeoutException) { }
+                }
+            }
+            val deadline = System.currentTimeMillis() + 6500
+            while (System.currentTimeMillis() < deadline && found.get() == null && tasks.any { !it.isDone }) {
+                Thread.sleep(80)
+            }
+            pool.shutdownNow()
+            found.get()?.let { device ->
+                prefs.edit().putString("ip", device.ip).apply()
+                runOnUiThread { ipInput.setText(device.ip) }
+                return device
             }
         }
-        val saved = prefs.getString("ip", null)
-        if (!saved.isNullOrBlank()) return Device("التلفاز المحفوظ", saved, discoverPort(saved))
-        throw IllegalStateException("لم يصل رد من التلفاز؛ أدخل عنوان IP يدوياً")
+        throw IllegalStateException("لم يتم العثور على تلفاز EShare على شبكة Wi-Fi نفسها")
+    }
+
+    private fun isControlPortOpen(ip: String, port: Int): Boolean {
+        return try {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(ip, port), 450)
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun discoverPort(ip: String): Int {
