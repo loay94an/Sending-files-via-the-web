@@ -154,13 +154,7 @@ async function createLocalPairing(){
  }catch(e){console.error(e);localMode=false;localState(lang==='ar'?'تعذر إنشاء الاقتران':'Could not create pairing');toast(e.message==='PEER_MISSING'?tr('peerMissing'):lang==='ar'?'تعذر إنشاء جلسة الاقتران. تحقق من الإنترنت.':'Could not create pairing. Check internet.')}
  finally{$('localCreate').disabled=false}
 }
-function showLocalPairRequest(conn){
- if(pendingLocalConnection){try{conn.close()}catch(_){}return}
- pendingLocalConnection=conn;localPendingRole='host';const meta=conn.metadata||{};
- $('pairRequestName').textContent=String(meta.name||'جهاز آخر').slice(0,80);
- $('pairRequest').classList.remove('hidden');localState(lang==='ar'?'طلب اقتران جديد؛ بانتظار موافقتك':'Pairing request; awaiting approval');
- conn.on('close',()=>{if(pendingLocalConnection===conn){pendingLocalConnection=null;$('pairRequest').classList.add('hidden');localState(lang==='ar'?'بانتظار جهاز آخر':'Waiting for another device',true)}});
-}
+function showLocalPairRequest(conn){if(pendingLocalConnection){try{conn.close()}catch(_){}return}pendingLocalConnection=conn;localPendingRole='host';const meta=conn.metadata||{};localState(lang==='ar'?'تم مسح رمز QR؛ بانتظار موافقة الجهاز الثاني':'QR scanned; waiting for approval on the second device');conn.on('close',()=>{if(pendingLocalConnection===conn){pendingLocalConnection=null;localPendingRole='';localState(lang==='ar'?'بانتظار مسح رمز جديد':'Waiting for another QR scan',true)}})}
 function approveLocalPair(){const conn=pendingLocalConnection;if(!conn)return;const role=localPendingRole;pendingLocalConnection=null;localPendingRole='';$('pairRequest').classList.add('hidden');if(role==='scanner'){conn._waslaLocalVerified=true;connections.set(conn.peer,conn);activeConnection=conn;renderPeers();activateLocalTransferUI();localState(lang==='ar'?'تمت الموافقة؛ الجهازان متصلان وجاهزان':'Approved; both devices are connected and ready',true);try{conn.send(JSON.stringify({type:'local-ready'}))}catch(e){console.warn('Local approval confirmation failed',e)}toast(lang==='ar'?'تم الاقتران؛ الإرسال والاستقبال متاحان على الجهازين.':'Paired; sending and receiving are ready on both devices.')}else{attachSenderConnection(conn,true);localState(lang==='ar'?'تمت الموافقة؛ جارٍ تأكيد الاتصال المحلي':'Accepted; confirming local connection')}}
 function rejectLocalPair(){const conn=pendingLocalConnection;pendingLocalConnection=null;$('pairRequest').classList.add('hidden');if(conn)try{conn.close()}catch(_){}localState(lang==='ar'?'تم رفض طلب الاقتران':'Pairing request rejected',true)}
 function privateAddress(value){
