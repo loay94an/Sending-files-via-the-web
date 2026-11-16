@@ -273,7 +273,7 @@ class MainActivity : Activity() {
             }
             private val line = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                 style = android.graphics.Paint.Style.STROKE
-                strokeWidth = dp(2)
+                strokeWidth = dp(2).toFloat()
                 color = 0xff477ca8.toInt()
             }
             private val label = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
@@ -286,7 +286,7 @@ class MainActivity : Activity() {
                 color = 0xffffffff.toInt()
                 textAlign = android.graphics.Paint.Align.CENTER
                 typeface = Typeface.DEFAULT_BOLD
-                textSize = dp(15f).toFloat()
+                textSize = dp(15).toFloat()
             }
             private var pressedSector = -1
             private val keys = intArrayOf(19, 22, 20, 21)
