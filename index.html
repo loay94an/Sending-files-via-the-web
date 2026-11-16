@@ -36,7 +36,7 @@
 <button id="localJoin" class="primary wide" type="button">طلب الاقتران</button>
 <div id="qrScanner" class="qr-scanner hidden"><video id="qrVideo" playsinline muted></video><button id="localScannerStop" class="secondary wide" type="button">إيقاف الكاميرا</button></div>
 <button id="localStop" class="danger wide hidden" type="button">إيقاف الاتصال المحلي</button>
-<p class="muted local-note">بعد الموافقة، يتحقق وصلة من أن مسار WebRTC المختار محلي (Host-to-Host وعناوين خاصة أو mDNS). إذا لم يثبت أن المسار محلي، يُغلق الاتصال بدل تمرير الملفات عبر الإنترنت. يجب فتح الموقع وتحميله قبل فصل الإنترنت.</p>
+<p class="muted local-note">بعد الموافقة، يتحقق وصلة من أن مسار WebRTC المختار محلي (Host/Peer-to-Peer وعناوين خاصة أو mDNS، بما يشمل اتصالات نقطة الاتصال). إذا لم يثبت أن المسار محلي، يُغلق الاتصال بدل تمرير الملفات عبر الإنترنت. يجب فتح الموقع وتحميله قبل فصل الإنترنت.</p>
 </section>
 <section id="receivePanel" class="panel hidden" role="tabpanel">
 <div class="panel-heading"><div><span class="step">01</span><h2 data-i18n="receiveTitle">انضم إلى جلسة</h2></div><span class="pill" id="receiveState" data-i18n="waiting">بانتظار الاتصال</span></div>
@@ -50,5 +50,5 @@
 </main>
 <div id="pairRequest" class="pair-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="pairRequestTitle"><div class="pair-dialog"><h2 id="pairRequestTitle">طلب اقتران جديد</h2><p>يريد هذا الجهاز الاتصال بك:</p><strong id="pairRequestName">جهاز آخر</strong><div class="pair-actions"><button id="pairReject" class="secondary" type="button">رفض</button><button id="pairAccept" class="primary" type="button">موافقة</button></div></div></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script><script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script><script src="./app.js?v=18" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script><script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script><script src="./app.js?v=19" defer></script>
 </body></html>
