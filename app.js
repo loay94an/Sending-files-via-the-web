@@ -177,7 +177,16 @@ async function isLocalWebRTCPath(conn){
  if(!pair)return false;const l=stats.get(pair.localCandidateId),r=stats.get(pair.remoteCandidateId);if(!l||!r)return false;
  return l.candidateType==='host'&&r.candidateType==='host'&&privateAddress(l.address||l.ip)&&privateAddress(r.address||r.ip);
 }
-async function verifyLocalConnection(conn){try{return await isLocalWebRTCPath(conn)}catch(e){console.warn('LAN route verification',e);return false}}
+async function verifyLocalConnection(conn,timeoutMs=15000){
+ const started=Date.now();let lastError=null;
+ while(Date.now()-started<timeoutMs){
+  if(!conn||conn.open===false)return false;
+  try{if(await isLocalWebRTCPath(conn))return true}catch(e){lastError=e}
+  await new Promise(resolve=>setTimeout(resolve,400));
+ }
+ if(lastError)console.warn('LAN route verification',lastError);
+ return false;
+}
 async function startLocalJoin(raw){
  let id=String(raw||'').trim();try{const u=new URL(id);id=u.searchParams.get('localJoin')||u.searchParams.get('join')||''}catch(_){}
  if(!/^[A-Za-z0-9_-]{5,100}$/.test(id)){toast(lang==='ar'?'رابط أو رمز الاقتران غير صالح.':'Invalid pairing link or code.');return}
