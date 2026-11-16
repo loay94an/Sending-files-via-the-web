@@ -20,7 +20,7 @@
 <label for="shareLink" data-i18n="shareLink">رابط الانضمام</label><div class="copy-row"><input id="shareLink" readonly aria-label="رابط الانضمام"><button id="copyLink" class="secondary" type="button" data-i18n="copy">نسخ</button></div>
 <div class="share-bottom"><div id="qrCode" class="qr" aria-label="رمز QR"></div><div class="share-code"><span data-i18n="sessionCode">رمز الجلسة</span><strong id="sessionCode">—</strong><button id="copyCode" class="text-button" type="button" data-i18n="copyCode">نسخ الرمز</button></div></div>
 </div>
-<div id="sendFilesArea" class="hidden">
+<div id="sendFilesArea" class="hidden"><button id="stopSender" class="danger wide hidden" type="button" data-i18n="stop">إيقاف الاتصال</button>
 <div class="divider"></div><div class="panel-heading compact"><div><span class="step">02</span><h2 data-i18n="chooseFiles">اختر الملفات</h2></div><span class="muted" id="peerCount">0</span></div>
 <label class="dropzone" for="fileInput" id="dropzone"><span class="upload-icon">＋</span><strong data-i18n="dropTitle">أضف الملفات للإرسال</strong><span data-i18n="dropHint">اضغط للاختيار أو اسحب الملفات إلى هنا</span><small data-i18n="multiHint">يمكنك اختيار عدة ملفات</small></label><input id="fileInput" type="file" multiple hidden>
 <div id="fileList" class="file-list"></div><button id="sendFiles" class="primary wide" type="button" disabled data-i18n="sendNow">إرسال الملفات إلى الأجهزة المتصلة</button><div id="sendProgress" class="progress-wrap hidden"><div class="progress-meta"><span id="sendStatus">—</span><strong id="sendPercent">0%</strong></div><div class="progress-track"><span id="sendBar"></span></div></div>
@@ -30,7 +30,7 @@
 <div class="panel-heading"><div><span class="step">01</span><h2 data-i18n="receiveTitle">انضم إلى جلسة</h2></div><span class="pill" id="receiveState" data-i18n="waiting">بانتظار الاتصال</span></div>
 <p class="muted" data-i18n="receiveHint">افتح رابط المرسل، أو أدخل رمز الجلسة الذي وصلك.</p>
 <label for="roomInput" data-i18n="roomCode">رمز الجلسة أو رابطها</label><div class="copy-row"><input id="roomInput" type="text" autocomplete="off" placeholder="مثال: 8f2a..."><button id="joinSession" class="primary" type="button" data-i18n="join">اتصال</button></div>
-<div id="receiveProgress" class="progress-wrap hidden"><div class="progress-meta"><span id="receiveStatus" data-i18n="receiving">جارٍ استقبال الملفات</span><strong id="receivePercent">0%</strong></div><div class="progress-track"><span id="receiveBar"></span></div></div><div id="receivedList" class="file-list"></div>
+<button id="stopReceiver" class="danger wide hidden" type="button" data-i18n="stop">إيقاف الاتصال</button><div id="receiveProgress" class="progress-wrap hidden"><div class="progress-meta"><span id="receiveStatus" data-i18n="receiving">جارٍ استقبال الملفات</span><strong id="receivePercent">0%</strong></div><div class="progress-track"><span id="receiveBar"></span></div></div><div id="receivedList" class="file-list"></div>
 </section>
 </section>
 <section class="features"><article><span>↔</span><div><strong data-i18n="f1title">من جهاز إلى جهاز</strong><p data-i18n="f1text">الملفات تنتقل عبر اتصال WebRTC بين الطرفين متى أمكن.</p></div></article><article><span>▦</span><div><strong data-i18n="f2title">رابط ورمز QR</strong><p data-i18n="f2text">شارك الجلسة بالرابط أو امسح الرمز من الجهاز الآخر.</p></div></article><article><span>⌘</span><div><strong data-i18n="f3title">مناسب للشاشات والريموت</strong><p data-i18n="f3text">عناصر كبيرة وتنقل واضح بلوحة المفاتيح.</p></div></article></section>
