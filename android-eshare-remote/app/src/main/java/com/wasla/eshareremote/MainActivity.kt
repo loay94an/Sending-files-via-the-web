@@ -1088,7 +1088,7 @@ class MainActivity : Activity() {
                 val (socket, streams) = openFileChannel()
                 socket.use {
                     val (input, output) = streams
-                    output.writeUTF("PUT $name64 $mime64 $size")
+                    output.writeUTF("PUT ${tvFolderStack.lastOrNull() ?: "ROOT"} $name64 $mime64 $size")
                     contentResolver.openInputStream(uri)?.use { source ->
                         val buffer = ByteArray(32 * 1024)
                         var remaining = size
