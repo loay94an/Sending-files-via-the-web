@@ -1095,44 +1095,18 @@ class MainActivity : Activity() {
         }
     }
 
-    // EShare's KEYEVENT channel carries Android key codes, not arbitrary Unicode.
-    // Arabic key positions are mapped to the TV's active Arabic keyboard layout.
+    // The original EShare keyboard sends Unicode through CONTENT rather than Latin key positions.
+    // Action 0 updates composing text; action 1 commits it. UTF-8 preserves Arabic strings.
     private fun sendText(value: String) {
-        val arabicKeys = mapOf(
-            'ض' to 45, 'ص' to 51, 'ث' to 33, 'ق' to 46, 'ف' to 48, 'غ' to 53,
-            'ع' to 49, 'ه' to 37, 'خ' to 43, 'ح' to 44, 'ج' to 71, 'د' to 72,
-            'ش' to 29, 'س' to 47, 'ي' to 32, 'ب' to 34, 'ل' to 35, 'ا' to 36,
-            'ت' to 38, 'ن' to 39, 'م' to 40, 'ك' to 74, 'ط' to 75, 'ئ' to 54,
-            'ء' to 52, 'ؤ' to 31, 'ر' to 50, 'ى' to 42, 'ة' to 41,
-            'و' to 55, 'ز' to 56, 'ظ' to 76
-        )
-        val keyCodes = mutableListOf<Int>()
-        for (ch in value) {
-            val code = when {
-                ch in 'a'..'z' -> 29 + (ch - 'a')
-                ch in 'A'..'Z' -> 29 + (ch.lowercaseChar() - 'a')
-                ch in '0'..'9' -> intArrayOf(7,8,9,10,11,12,13,14,15,16)[ch - '0']
-                ch == ' ' -> 62
-                ch == '\n' || ch == '\r' -> 66
-                ch == '.' -> 56
-                ch == ',' || ch == '،' -> 55
-                ch == '-' -> 69
-                ch == '/' -> 76
-                ch == ':' || ch == ';' -> 74
-                else -> arabicKeys[ch]
-            }
-            if (code != null && code > 0) keyCodes.add(code)
-        }
-        if (keyCodes.isEmpty()) {
-            setStatus("لا توجد أحرف مدعومة في النص المدخل")
-            return
-        }
+        val text = value.replace("\r", "").replace("\n", " ")
+        if (text.isBlank()) return
         io.execute {
             try {
-                for (code in keyCodes) writePacketWithReconnect("KEYEVENT\r\n$code\r\n\r\n")
+                writePacketWithReconnect("CONTENT\r\n0\r\n0 $text\r\n\r\n")
+                writePacketWithReconnect("CONTENT\r\n1\r\n0 $text\r\n\r\n")
                 setStatus("تم إرسال النص إلى التلفاز")
-            } catch (_: Exception) {
-                setStatus("توقف إرسال النص بسبب انقطاع الاتصال")
+            } catch (e: Exception) {
+                setStatus("تعذر إرسال النص: \${e.message ?: "تحقق من الاتصال"}")
             }
         }
     }
