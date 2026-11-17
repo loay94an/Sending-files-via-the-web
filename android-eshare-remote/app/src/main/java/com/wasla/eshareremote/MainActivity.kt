@@ -1474,11 +1474,86 @@ class MainActivity : Activity() {
             .setTitle("طريقة الاتصال")
             .setItems(arrayOf("التعرّف التلقائي على الشاشة", "الاتصال بمسح رمز QR")) { _, choice ->
                 when (choice) {
-                    0 -> discoverAndConnect()
+                    0 -> discoverWaslaThenEShare()
                     1 -> startWaslaQrScanner()
                 }
             }
             .setNegativeButton("إلغاء", null)
+            .show()
+    }
+
+    private data class WaslaReceiverCandidate(val deviceId: String, val ip: String, val port: Int)
+
+    private fun discoverWaslaThenEShare() {
+        if (!reconnecting.compareAndSet(false, true)) return
+        connectButton.isEnabled = false
+        setStatus("جارٍ البحث عن مستقبلات وصلة والشاشات المتوافقة...")
+        io.execute {
+            val found = LinkedHashMap<String, WaslaReceiverCandidate>()
+            try {
+                DatagramSocket().use { socket ->
+                    socket.broadcast = true
+                    socket.soTimeout = 250
+                    val probe = "WASLA_DISCOVER/1".toByteArray(Charsets.UTF_8)
+                    val broadcast = DatagramPacket(probe, probe.size, InetAddress.getByName("255.255.255.255"), 38470)
+                    socket.send(broadcast)
+                    val deadline = android.os.SystemClock.elapsedRealtime() + 2200L
+                    val buffer = ByteArray(512)
+                    while (android.os.SystemClock.elapsedRealtime() < deadline) {
+                        try {
+                            val packet = DatagramPacket(buffer, buffer.size)
+                            socket.receive(packet)
+                            val fields = String(packet.data, packet.offset, packet.length, Charsets.UTF_8).trim().split(' ')
+                            if (fields.size >= 4 && fields[0] == "WASLA-TV-DISCOVER/1") {
+                                val id = fields[1]
+                                val ip = fields[2].ifBlank { packet.address.hostAddress ?: "" }
+                                val port = fields[3].toIntOrNull()
+                                if (id.isNotBlank() && ip.isNotBlank() && port == 38471) {
+                                    found["$id@$ip"] = WaslaReceiverCandidate(id, ip, port)
+                                }
+                            }
+                        } catch (_: SocketTimeoutException) { }
+                    }
+                }
+            } catch (_: Exception) { }
+            runOnUiThread {
+                reconnecting.set(false)
+                connectButton.isEnabled = true
+                if (found.isNotEmpty()) {
+                    showWaslaReceiverChoices(found.values.toList())
+                } else {
+                    setStatus("لم يُعثر على مستقبل وصلة — جارٍ البحث عن شاشات EShare...")
+                    discoverAndConnect()
+                }
+            }
+        }
+    }
+
+    private fun showWaslaReceiverChoices(devices: List<WaslaReceiverCandidate>) {
+        val labels = devices.map { "وصلة TV\\n${it.ip}  •  المنفذ ${it.port}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("اختر مستقبل وصلة")
+            .setItems(labels) { _, which ->
+                if (which in devices.indices) showWaslaPinPrompt(devices[which])
+            }
+            .setNegativeButton("إلغاء", null)
+            .show()
+    }
+
+    private fun showWaslaPinPrompt(device: WaslaReceiverCandidate) {
+        val codeInput = EditText(this).apply {
+            hint = "رمز الاقتران الظاهر على التلفاز"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setSingleLine(true)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("تأكيد الاقتران")
+            .setMessage("تم العثور على مستقبل وصلة على الشبكة. أدخل رمز التأكيد الظاهر على شاشة التلفاز.")
+            .setView(codeInput)
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("اقتران") { _, _ ->
+                connectWaslaReceiver(device.ip, codeInput.text.toString().trim(), device.deviceId)
+            }
             .show()
     }
 
