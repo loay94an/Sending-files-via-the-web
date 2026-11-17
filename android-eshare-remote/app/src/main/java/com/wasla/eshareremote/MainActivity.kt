@@ -29,7 +29,6 @@ class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
     // Keep pointer traffic off the discovery/key-command executor to avoid input stalls.
     private val airMouseIo = Executors.newSingleThreadExecutor()
-    private val airMouseLock = Any()
     private val gyroPositionLock = Any()
     private val socketWriteLock = Any()
     private var gyroCursorX = 640f
@@ -37,9 +36,6 @@ class MainActivity : Activity() {
     private var pendingGyroPosition: Pair<Float, Float>? = null
     private var gyroPositionWriteQueued = false
     private var lastTouchMoveAt = 0L
-    private var pendingAirDx = 0f
-    private var pendingAirDy = 0f
-    private var airMouseWriteQueued = false
     private var tcp: Socket? = null
     private var output: OutputStream? = null
     private var discoveryLock: WifiManager.MulticastLock? = null
@@ -49,11 +45,6 @@ class MainActivity : Activity() {
     private var lastGyroTimestamp = 0L
     private var smoothedGyroDx = 0f
     private var smoothedGyroDy = 0f
-    @Volatile private var lastAirSendAt = 0L
-    // Keep air-mouse movement controlled; touchpad sensitivity is independent.
-    private val gyroSensitivity = 0.18f
-    private val gyroSmoothing = 0.22f
-    private val touchSensitivity = 0.12f
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
@@ -862,55 +853,6 @@ class MainActivity : Activity() {
         synchronized(socketWriteLock) {
             output?.write(packet.toByteArray(Charsets.UTF_8))
             output?.flush()
-        }
-    }
-
-    private fun sendAirMouse(dx: Float, dy: Float) {
-        if (dx == 0f && dy == 0f) return
-        synchronized(airMouseLock) {
-            pendingAirDx = (pendingAirDx + dx).coerceIn(-240f, 240f)
-            pendingAirDy = (pendingAirDy + dy).coerceIn(-240f, 240f)
-            if (airMouseWriteQueued) return
-            airMouseWriteQueued = true
-        }
-        // Merge rapid sensor/touch events so the executor cannot build a lagging queue.
-        airMouseIo.execute { drainAirMouseMovement() }
-    }
-
-    private fun drainAirMouseMovement() {
-        try {
-            val delta = synchronized(airMouseLock) {
-                val pair = pendingAirDx to pendingAirDy
-                pendingAirDx = 0f
-                pendingAirDy = 0f
-                pair
-            }
-            if (tcp?.isConnected != true || tcp?.isClosed != false) {
-                val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
-                connect(Device("التلفاز", ip, discoverPort(ip)))
-            }
-            if (delta.first != 0f || delta.second != 0f) {
-                // Dedicated pointer worker prevents discovery/key tasks from delaying cursor packets.
-                // EShare mode-2 AIRMOUSEEVNET is rate-limited to 55 ms; matching it avoids dropped cursor updates.
-                val now = System.currentTimeMillis()
-                val waitMs = 55L - (now - lastAirSendAt)
-                if (waitMs > 0L) Thread.sleep(waitMs)
-                val packet = "AIRMOUSEEVNET\r\n${delta.first}\r\n${delta.second}\r\n2\r\n\r\n"
-                synchronized(socketWriteLock) {
-                    output?.write(packet.toByteArray(Charsets.UTF_8))
-                    output?.flush()
-                }
-                lastAirSendAt = System.currentTimeMillis()
-            }
-        } catch (e: Exception) {
-            closeConnection()
-            setStatus("تعذر تحريك الماوس: ${e.message ?: "أعد الاتصال"}")
-        } finally {
-            val again = synchronized(airMouseLock) {
-                if (pendingAirDx != 0f || pendingAirDy != 0f) true
-                else { airMouseWriteQueued = false; false }
-            }
-            if (again) airMouseIo.execute { drainAirMouseMovement() }
         }
     }
 
