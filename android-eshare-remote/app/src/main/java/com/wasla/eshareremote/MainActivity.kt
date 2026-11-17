@@ -449,11 +449,6 @@ class MainActivity : Activity() {
                         // Air-mouse tap clicks the current gyro pointer position,
                         // matching the corrected normal touchpad click behavior.
                         sendPointerClick()
-                    } else if (moved && waslaTvSocket != null) {
-                        sendWaslaSwipe(
-                            touchStartRemoteX, touchStartRemoteY, gyroCursorX, gyroCursorY,
-                            (System.currentTimeMillis() - touchStartAt).coerceIn(80L, 2000L)
-                        )
                     } else if (!moved) {
                         // Click the current absolute pointer position; do not send
                         // KEYEVENT OK, which selects focus rather than the cursor target.
