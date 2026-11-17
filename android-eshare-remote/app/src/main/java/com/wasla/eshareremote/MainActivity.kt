@@ -24,6 +24,9 @@ import android.os.Looper
 import android.view.View
 import android.widget.*
 import java.io.OutputStream
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.ServerSocket
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -59,6 +62,8 @@ class MainActivity : Activity() {
     private var pendingTouchDy = 0f
     private var tcp: Socket? = null
     private var output: OutputStream? = null
+    private var localHttpServer: ServerSocket? = null
+    private var localHttpPort: Int = 0
     private var discoveryLock: WifiManager.MulticastLock? = null
     private lateinit var sensorManager: SensorManager
     private var gyroSensor: Sensor? = null
@@ -87,6 +92,7 @@ class MainActivity : Activity() {
         }
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+        startLocalHttpServer()
         buildUi()
         val saved = prefs.getString("ip", "") ?: ""
         ipInput.setText(saved)
@@ -969,25 +975,23 @@ class MainActivity : Activity() {
         socket.connect(InetSocketAddress(device.ip, device.port), 4000)
         tcp = socket
         output = socket.getOutputStream()
-        // Match the official EShare client: request the actual framebuffer size
-        // before sending pointer packets. A fixed 1280x720 scale can be rejected
-        // or mapped incorrectly on TVs with another framebuffer resolution.
+        // Match the original EShare client session setup before sending commands.
         try {
-            socket.soTimeout = 1200
-            output?.write("GETFBINFO\r\n1\r\n\r\n".toByteArray(Charsets.UTF_8))
-            output?.flush()
-            val response = ByteArray(1024)
-            val count = socket.getInputStream().read(response)
-            if (count > 0) {
-                val payload = String(response, 0, count, Charsets.UTF_8)
-                val values = Regex("\\d+").findAll(payload).mapNotNull { it.value.toIntOrNull() }.toList()
-                if (values.size >= 2 && values[0] in 320..16384 && values[1] in 240..16384) {
-                    framebufferWidth = values[0].toFloat()
-                    framebufferHeight = values[1].toFloat()
-                }
+            socket.soTimeout = 1000
+            socket.tcpNoDelay = true
+            readHandshakeReply(socket, "getFeatures\r\nBoxlightPro\r\n\r\n")
+            val rootPath = Environment.getExternalStorageDirectory().absolutePath
+            socket.getOutputStream().write(("auth\r\n" + rootPath + " " + localHttpPort + " onelong\r\n\r\n").toByteArray(Charsets.UTF_8))
+            socket.getOutputStream().flush()
+            readHandshakeReply(socket, "getServerInfo\r\n1\r\n\r\n")
+            val fb = readHandshakeReply(socket, "GETFBINFO\r\n1\r\n\r\n")
+            val values = Regex("\\d+").findAll(fb).mapNotNull { it.value.toIntOrNull() }.toList()
+            if (values.size >= 2 && values[0] in 320..16384 && values[1] in 240..16384) {
+                framebufferWidth = values[0].toFloat()
+                framebufferHeight = values[1].toFloat()
             }
-        } catch (_: Exception) {
-            // Keep a safe fallback if this EShare firmware does not answer GETFBINFO.
+        } catch (e: Exception) {
+            setStatus("تعذر تهيئة جلسة EShare: " + (e.message ?: "خطأ في المصادقة"))
         } finally {
             try { socket.soTimeout = 500 } catch (_: Exception) { }
         }
@@ -996,6 +1000,60 @@ class MainActivity : Activity() {
         prefs.edit().putString("ip", device.ip).putInt("port", device.port).apply()
         startSocketReader(socket)
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
+    }
+
+    private fun readHandshakeReply(socket: Socket, packet: String): String {
+        socket.getOutputStream().write(packet.toByteArray(Charsets.UTF_8))
+        socket.getOutputStream().flush()
+        return try {
+            val bytes = ByteArray(2048)
+            val count = socket.getInputStream().read(bytes)
+            if (count > 0) String(bytes, 0, count, Charsets.UTF_8) else ""
+        } catch (_: java.net.SocketTimeoutException) {
+            ""
+        }
+    }
+
+    private fun startLocalHttpServer() {
+        if (localHttpServer != null) return
+        try {
+            var server: ServerSocket? = null
+            for (port in 8888..8900) {
+                try {
+                    server = ServerSocket(port)
+                    break
+                } catch (_: Exception) { }
+            }
+            if (server == null) throw IllegalStateException("No local callback port available")
+            localHttpServer = server
+            localHttpPort = server.localPort
+            Thread {
+                while (!server.isClosed) {
+                    try {
+                        val client = server.accept()
+                        Thread {
+                            client.use { connection ->
+                                try {
+                                    connection.soTimeout = 1500
+                                    val reader = BufferedReader(InputStreamReader(connection.getInputStream(), Charsets.UTF_8))
+                                    while (true) {
+                                        val line = reader.readLine() ?: break
+                                        if (line.isEmpty()) break
+                                    }
+                                    val response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                    connection.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
+                                    connection.getOutputStream().flush()
+                                } catch (_: Exception) { }
+                            }
+                        }.start()
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+            }.apply { name = "Wasla-EShare-Callback"; isDaemon = true; start() }
+        } catch (e: Exception) {
+            setStatus("تعذر تشغيل خدمة الاتصال المحلية: " + (e.message ?: "خطأ"))
+        }
     }
 
     private fun startAirMouse() {
@@ -1266,6 +1324,8 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         speechRecognizer?.destroy()
         speechRecognizer = null
+        try { localHttpServer?.close() } catch (_: Exception) { }
+        localHttpServer = null
         gestureHandler.removeCallbacksAndMessages(null)
         connectionMonitor.shutdownNow()
         closeConnection()
