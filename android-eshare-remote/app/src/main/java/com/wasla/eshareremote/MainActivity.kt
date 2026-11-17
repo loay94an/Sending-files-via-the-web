@@ -130,6 +130,8 @@ class MainActivity : Activity() {
     private val waslaMonitorStarted = AtomicBoolean(false)
     @Volatile private var lastWaslaPongAt = 0L
     @Volatile private var lastWaslaPingAt = 0L
+    @Volatile private var lastEshareKeepAliveAt = 0L
+    @Volatile private var lastFullDiscoveryAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -1373,9 +1375,16 @@ class MainActivity : Activity() {
                     val savedPort = prefs.getInt("port", 8121)
                     // During recovery, verify the last known receiver first. This avoids
                     // a full subnet sweep every time Wi-Fi briefly drops a TCP session.
+                    val now = android.os.SystemClock.elapsedRealtime()
                     if (!interactive && savedIp.isNotBlank() && isControlPortOpen(savedIp, savedPort)) {
                         Device(prefs.getString("device_name", "التلفاز") ?: "التلفاز", savedIp, savedPort)
-                    } else discover(interactive)
+                    } else if (!interactive && savedIp.isNotBlank() && now - lastFullDiscoveryAt < 25000L) {
+                        // Retry the last receiver directly between full discovery sweeps.
+                        Device(prefs.getString("device_name", "التلفاز") ?: "التلفاز", savedIp, savedPort)
+                    } else {
+                        lastFullDiscoveryAt = now
+                        discover(interactive)
+                    }
                 }
                 connect(found)
             } catch (e: Exception) {
@@ -1770,6 +1779,7 @@ class MainActivity : Activity() {
         val socket = Socket()
         socket.connect(InetSocketAddress(device.ip, device.port), 4000)
         socket.tcpNoDelay = true
+        socket.keepAlive = true
         tcp = socket
         output = socket.getOutputStream()
         prefs.edit().putString("ip", device.ip).putInt("port", device.port).apply()
@@ -1802,6 +1812,7 @@ class MainActivity : Activity() {
         } finally {
             try { socket.soTimeout = 0 } catch (_: Exception) { }
         }
+        lastEshareKeepAliveAt = android.os.SystemClock.elapsedRealtime()
         startSocketReader(socket)
         runOnUiThread { connectionIpLabel?.text = "⌁  ${device.ip}" }
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
@@ -2476,8 +2487,27 @@ class MainActivity : Activity() {
         // Network callbacks handle route changes; this loop retries discovery when disconnected.
         connectionMonitor.scheduleWithFixedDelay({
             val socket = tcp
-            if ((socket == null || socket.isClosed || !socket.isConnected) && !reconnecting.get()) {
-                setStatus("الاتصال غير نشط — جارٍ إعادة اكتشاف الشاشة تلقائياً...")
+            if (socket != null && !socket.isClosed && socket.isConnected) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastEshareKeepAliveAt >= 20000L) {
+                    try {
+                        synchronized(socketWriteLock) {
+                            if (tcp === socket && !socket.isClosed) {
+                                val stream = output ?: throw IllegalStateException("قناة التحكم مغلقة")
+                                // GETFBINFO is a harmless EShare request already used during
+                                // handshake; periodic requests prevent idle-session expiry.
+                                stream.write("GETFBINFO\\r\\n1\\r\\n\\r\\n".toByteArray(Charsets.UTF_8))
+                                stream.flush()
+                                lastEshareKeepAliveAt = now
+                            }
+                        }
+                    } catch (_: Exception) {
+                        closeConnection()
+                        setStatus("فُقدت جلسة التحكم — جارٍ استعادتها...")
+                    }
+                }
+            } else if (!reconnecting.get()) {
+                setStatus("الاتصال غير نشط — جارٍ استعادة الشاشة تلقائياً...")
                 discoverAndConnect()
             }
         }, 5, 5, TimeUnit.SECONDS)
