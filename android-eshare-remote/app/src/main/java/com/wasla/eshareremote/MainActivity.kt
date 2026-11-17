@@ -1107,6 +1107,10 @@ class MainActivity : Activity() {
             handshakeWrite(socket, "getFeatures\r\nBoxlightPro\r\n\r\n")
             handshakeRead(socket, 1200)
             handshakeWrite(socket, "auth\r\n${android.os.Environment.getExternalStorageDirectory().absolutePath} $httpPort onelong\r\n\r\n")
+            // EShare replies to each setup command. Consume the auth response before
+            // sending getServerInfo, otherwise the next read may consume the wrong reply
+            // and leave the keyboard/input channel in an unauthenticated state.
+            handshakeRead(socket, 1800)
             handshakeWrite(socket, "getServerInfo\r\n1\r\n\r\n")
             handshakeRead(socket, 1800)
             handshakeWrite(socket, "GETFBINFO\r\n1\r\n\r\n")
