@@ -39,6 +39,8 @@ class MainActivity : Activity() {
     private var pendingGyroPosition: Pair<Float, Float>? = null
     private var gyroPositionWriteQueued = false
     private var lastTouchMoveAt = 0L
+    private var pendingTouchDx = 0f
+    private var pendingTouchDy = 0f
     private var tcp: Socket? = null
     private var output: OutputStream? = null
     private var discoveryLock: WifiManager.MulticastLock? = null
@@ -818,8 +820,8 @@ class MainActivity : Activity() {
             val rateY = if (kotlin.math.abs(event.values[0]) < 0.008f) 0f else event.values[0]
             // Increase cursor travel while retaining time-based integration so
             // sensitivity stays consistent across different sensor sample rates.
-            val targetDx = -rateX * dt * 540f
-            val targetDy = -rateY * dt * 540f
+            val targetDx = -rateX * dt * 594f
+            val targetDy = -rateY * dt * 594f
             // Faster response with enough filtering to avoid a jittery pointer.
             smoothedGyroDx += (targetDx - smoothedGyroDx) * 0.65f
             smoothedGyroDy += (targetDy - smoothedGyroDy) * 0.65f
@@ -838,15 +840,30 @@ class MainActivity : Activity() {
         viewWidth: Int = 1,
         viewHeight: Int = 1
     ) {
+        var moveDx = dx
+        var moveDy = dy
         if (action == 2) {
+            // Keep every small finger movement instead of dropping events while
+            // rate-limiting. Flush accumulated motion at roughly 60 Hz.
+            pendingTouchDx += dx
+            pendingTouchDy += dy
             val now = System.currentTimeMillis()
-            if (now - lastTouchMoveAt < 55L) return
+            if (now - lastTouchMoveAt < 16L) return
             lastTouchMoveAt = now
+            moveDx = pendingTouchDx
+            moveDy = pendingTouchDy
+            pendingTouchDx = 0f
+            pendingTouchDy = 0f
+        } else {
+            pendingTouchDx = 0f
+            pendingTouchDy = 0f
+            lastTouchMoveAt = 0L
         }
-        // AIRMOUSEEVNET is EShare's relative pointer protocol. SLIDEEVENT
-        // injects touch input and does not drive the visible remote mouse cursor.
-        val scaledX = dx * framebufferWidth / viewWidth.coerceAtLeast(1)
-        val scaledY = dy * framebufferHeight / viewHeight.coerceAtLeast(1)
+        // AIRMOUSEEVNET is EShare's relative pointer protocol. Accumulating
+        // motion at a 60 Hz cadence makes the touchpad smoother without losing
+        // small movements between transmitted packets.
+        val scaledX = moveDx * framebufferWidth / viewWidth.coerceAtLeast(1)
+        val scaledY = moveDy * framebufferHeight / viewHeight.coerceAtLeast(1)
         val packet = "AIRMOUSEEVNET\r\n$scaledX\r\n$scaledY\r\n$action\r\n\r\n"
         airMouseIo.execute {
             try {
