@@ -725,29 +725,20 @@ class MainActivity : Activity() {
             }
         } catch (_: Exception) { }
 
-        val saved = prefs.getString("ip", null)
-        val savedPort = prefs.getInt("port", 8121)
-        if (!saved.isNullOrBlank() && isControlPortOpen(saved, savedPort)) {
-            return Device("التلفاز المحفوظ", saved, savedPort)
-        }
-
         data class Subnet(val local: InetAddress, val broadcast: InetAddress, val prefix: Int)
         val subnets = mutableListOf<Subnet>()
         if (dhcp.ipAddress != 0 && dhcp.netmask != 0) {
             try {
                 val local = InetAddress.getByAddress(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(dhcp.ipAddress).array())
                 val mask = dhcp.netmask
-                val prefix = Integer.bitCount(mask)
-                val b = (dhcp.ipAddress and mask) or mask.inv()
-                val broadcast = InetAddress.getByAddress(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(b).array())
-                subnets.add(Subnet(local, broadcast, prefix))
+                val broadcastValue = (dhcp.ipAddress and mask) or mask.inv()
+                val broadcast = InetAddress.getByAddress(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(broadcastValue).array())
+                subnets.add(Subnet(local, broadcast, Integer.bitCount(mask)))
             } catch (_: Exception) { }
         }
-
-        // Android hotspot interfaces are often absent from WifiManager.dhcpInfo.
+        // Include Wi-Fi, hotspot, Ethernet and other active IPv4 interfaces.
         try {
             val interfaces = java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces())
-                .sortedByDescending { it.name.contains("wlan", true) || it.name.contains("ap", true) || it.name.contains("wifi", true) }
             for (networkInterface in interfaces) {
                 if (!networkInterface.isUp || networkInterface.isLoopback) continue
                 for (entry in networkInterface.interfaceAddresses) {
@@ -761,78 +752,97 @@ class MainActivity : Activity() {
             }
         } catch (_: Exception) { }
 
-        // Broadcast discovery through every active IPv4 interface, including phone hotspot.
+        // Keep every discovered screen instead of returning the first UDP reply.
+        val devices = java.util.concurrent.ConcurrentHashMap<String, Device>()
+        fun addDevice(device: Device) {
+            if (device.ip.isNotBlank() && device.port in 1..65535) {
+                devices["${device.ip}:${device.port}"] = device
+            }
+        }
+
         try {
             val bytes = packet()
-            val udp = DatagramSocket(null)
-            udp.reuseAddress = true
-            udp.bind(InetSocketAddress(48689))
-            udp.broadcast = true
-            udp.soTimeout = 500
-            try {
+            DatagramSocket(null).use { udp ->
+                udp.reuseAddress = true
+                udp.bind(InetSocketAddress(48689))
+                udp.broadcast = true
+                udp.soTimeout = 350
                 val targets = (subnets.map { it.broadcast } + InetAddress.getByName("255.255.255.255"))
                     .distinctBy { it.hostAddress }
                 for (target in targets) {
                     try { udp.send(DatagramPacket(bytes, bytes.size, target, 48689)) } catch (_: Exception) { }
                 }
+                val deadline = System.currentTimeMillis() + 2800
                 val buffer = ByteArray(2048)
-                val deadline = System.currentTimeMillis() + 3500
                 while (System.currentTimeMillis() < deadline) {
                     try {
                         val response = DatagramPacket(buffer, buffer.size)
                         udp.receive(response)
-                        val text = String(response.data, 0, response.length, Charsets.UTF_8)
-                        if (text.startsWith("ECloudBox")) {
-                            val fields = text.split(":")
-                            if (fields.size >= 3) {
-                                val port = fields[2].toIntOrNull()
-                                val ip = response.address.hostAddress
-                                if (port != null && !ip.isNullOrBlank()) {
-                                    val device = Device(fields.getOrElse(1) { "EShare" }, ip, port)
-                                    prefs.edit().putString("ip", ip).apply()
-                                    runOnUiThread { ipInput.setText(ip) }
-                                    return device
-                                }
-                            }
+                        val payload = String(response.data, 0, response.length, Charsets.UTF_8)
+                        if (payload.startsWith("ECloudBox")) {
+                            val fields = payload.split(":")
+                            val port = fields.getOrNull(2)?.toIntOrNull() ?: 8121
+                            val ip = response.address.hostAddress ?: continue
+                            addDevice(Device(fields.getOrElse(1) { "شاشة EShare" }, ip, port))
                         }
                     } catch (_: java.net.SocketTimeoutException) { }
                 }
-            } finally {
-                udp.close()
             }
         } catch (_: Exception) { }
 
-        setStatus("لم يرد اكتشاف UDP؛ جارٍ فحص عناوين شبكة الهاتف ونقطة الاتصال...")
-        val found = java.util.concurrent.atomic.AtomicReference<Device?>(null)
-        val pool = Executors.newFixedThreadPool(48)
+        // Fallback for EShare devices that do not answer UDP discovery.
+        // Probe every host in each active local subnet; do not assume a saved IP.
+        setStatus("جارٍ فحص الشبكة لاكتشاف جميع الشاشات...")
+        val pool = Executors.newFixedThreadPool(64)
         val tasks = mutableListOf<java.util.concurrent.Future<*>>()
         for (subnet in subnets) {
-            val prefix = subnet.prefix.coerceIn(1, 30).let { if (it < 23) 24 else it }
+            val prefix = subnet.prefix.coerceIn(1, 30).coerceAtMost(24)
             val local = ByteBuffer.wrap(subnet.local.address).order(ByteOrder.LITTLE_ENDIAN).int
             val mask = -1 shl (32 - prefix)
             val network = local and mask
-            val broadcastIp = network or mask.inv()
-            for (host in (network + 1) until broadcastIp) {
-                if (host == local || found.get() != null) continue
+            val broadcast = network or mask.inv()
+            for (host in (network + 1) until broadcast) {
+                if (host == local) continue
                 val ip = listOf(host and 255, (host ushr 8) and 255, (host ushr 16) and 255, (host ushr 24) and 255).joinToString(".")
                 tasks.add(pool.submit {
-                    if (found.get() == null && isControlPortOpen(ip, 8121)) {
-                        found.compareAndSet(null, Device("تلفاز EShare", ip, 8121))
-                    }
+                    if (isControlPortOpen(ip, 8121)) addDevice(Device("شاشة EShare", ip, 8121))
                 })
             }
         }
-        val deadline = System.currentTimeMillis() + 9000
-        while (System.currentTimeMillis() < deadline && found.get() == null && tasks.any { !it.isDone }) {
-            Thread.sleep(80)
-        }
+        val deadline = System.currentTimeMillis() + 12000
+        while (System.currentTimeMillis() < deadline && tasks.any { !it.isDone }) Thread.sleep(80)
         pool.shutdownNow()
-        found.get()?.let { device ->
-            prefs.edit().putString("ip", device.ip).apply()
-            runOnUiThread { ipInput.setText(device.ip) }
-            return device
+
+        val found = devices.values.sortedWith(compareBy<Device> { it.name }.thenBy { it.ip })
+        if (found.isEmpty()) {
+            throw IllegalStateException("لم يتم العثور على شاشة EShare. تأكد أن الهاتف والشاشة على الشبكة نفسها وأن عزل الأجهزة غير مفعّل في الراوتر.")
         }
-        throw IllegalStateException("لم يتم العثور على تلفاز EShare. تأكد أن التلفاز متصل بنقطة اتصال الهاتف، أو أدخل عنوان IP الظاهر للتلفاز يدوياً.")
+        val selected = if (found.size == 1) found.first() else chooseDiscoveredDevice(found)
+        prefs.edit().putString("ip", selected.ip).putInt("port", selected.port).putString("device_name", selected.name).apply()
+        runOnUiThread { ipInput.setText(selected.ip) }
+        return selected
+    }
+
+    private fun chooseDiscoveredDevice(devices: List<Device>): Device {
+        val result = java.util.concurrent.atomic.AtomicReference<Device?>(null)
+        val latch = java.util.concurrent.CountDownLatch(1)
+        runOnUiThread {
+            val labels = devices.mapIndexed { index, device ->
+                "${index + 1}. ${device.name}\n${device.ip}  •  منفذ ${device.port}"
+            }.toTypedArray()
+            android.app.AlertDialog.Builder(this)
+                .setTitle("اختر الشاشة المراد الاتصال بها")
+                .setItems(labels) { _, which ->
+                    if (which in devices.indices) result.set(devices[which])
+                    latch.countDown()
+                }
+                .setOnCancelListener { latch.countDown() }
+                .show()
+        }
+        if (!latch.await(90, TimeUnit.SECONDS)) {
+            throw IllegalStateException("انتهت مهلة اختيار الشاشة")
+        }
+        return result.get() ?: throw IllegalStateException("لم يتم اختيار شاشة")
     }
 
     private fun isControlPortOpen(ip: String, port: Int): Boolean {
