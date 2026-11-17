@@ -45,6 +45,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import java.util.concurrent.atomic.AtomicLong
 
 class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
@@ -87,6 +93,10 @@ class MainActivity : Activity() {
     private var touchStartAt = 0L
     private var pendingDownloadId: String? = null
     private var pendingDownloadName: String = "wasla-download.bin"
+    private val relayClient = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
+    @Volatile private var relaySocket: WebSocket? = null
+    private val relayConnecting = AtomicBoolean(false)
+    private val relayMessageId = AtomicLong(0L)
     private var pendingGyroPosition: Pair<Float, Float>? = null
     private var gyroPositionWriteQueued = false
     private var lastTouchMoveAt = 0L
@@ -681,6 +691,18 @@ class MainActivity : Activity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
             override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
         })
+        val relayLabel = TextView(this).apply {
+            text = "خادم الاتصال الآمن عبر الإنترنت (اختياري)"
+            textSize = 14f
+            setTextColor(0xff15243a.toInt())
+        }
+        val relayInput = EditText(this).apply {
+            hint = "https://your-worker.workers.dev"
+            singleLine = true
+            textSize = 14f
+            setText(prefs.getString("relay_base_url", "") ?: "")
+            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
+        }
         val touchLabel = TextView(this).apply { textSize = 15f; setTextColor(0xff15243a.toInt()) }
         val touchSeek = SeekBar(this).apply {
             max = 20
@@ -698,6 +720,8 @@ class MainActivity : Activity() {
         content.addView(airSeek, LinearLayout.LayoutParams(-1, dp(44)))
         content.addView(touchLabel)
         content.addView(touchSeek, LinearLayout.LayoutParams(-1, dp(44)))
+        content.addView(relayLabel)
+        content.addView(relayInput, LinearLayout.LayoutParams(-1, dp(48)))
         AlertDialog.Builder(this)
             .setTitle("إعدادات وصلة")
             .setView(content)
@@ -706,8 +730,10 @@ class MainActivity : Activity() {
                 prefs.edit()
                     .putFloat("air_mouse_sensitivity", (500 + airSeek.progress).toFloat())
                     .putFloat("touchpad_sensitivity", 0.5f + touchSeek.progress / 10f)
+                    .putString("relay_base_url", relayInput.text.toString().trim().trimEnd('/'))
                     .apply()
-                setStatus("تم حفظ إعدادات حساسية المؤشر")
+                if (relayInput.text.toString().isNotBlank()) connectWaslaRelay() else disconnectWaslaRelay()
+                setStatus("تم حفظ إعدادات وصلة")
             }
             .setNeutralButton("تحديث التطبيق") { _, _ -> checkForUpdates() }
             .show()
@@ -1932,8 +1958,10 @@ class MainActivity : Activity() {
                 val now = android.os.SystemClock.elapsedRealtime()
                 lastWaslaPongAt = now
                 lastWaslaPingAt = now
-                prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code).apply()
+                prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code)
+                    .putString("wasla_tv_id", expectedDeviceId ?: "").apply()
                 setStatus("متصل بمستقبل وصلة على التلفاز — اتصال محلي")
+                connectWaslaRelay()
                 Thread({
                     try {
                         while (!socket.isClosed) {
@@ -2035,21 +2063,88 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Sends a whitelisted command over the already PIN-paired Wasla session. */
-    private fun sendWaslaAction(command: String): Boolean {
-        synchronized(waslaTvLock) {
-            val socket = waslaTvSocket ?: return false
-            val out = waslaTvOutput ?: return false
-            if (socket.isClosed || !socket.isConnected) return false
-            return try {
-                out.write("ACTION $command\n".toByteArray(Charsets.UTF_8))
-                out.flush()
-                true
-            } catch (_: Exception) {
-                closeWaslaReceiver()
-                false
+    private fun connectWaslaRelay() {
+        if (!relayConnecting.compareAndSet(false, true)) return
+        val base = prefs.getString("relay_base_url", "")?.trim()?.trimEnd('/') ?: ""
+        val deviceId = prefs.getString("wasla_tv_id", "") ?: ""
+        val code = prefs.getString("wasla_tv_code", "") ?: ""
+        if (base.isBlank() || deviceId.isBlank() || !code.matches(Regex("\\d{6}"))) {
+            relayConnecting.set(false)
+            return
+        }
+        val wsBase = when {
+            base.startsWith("https://", true) -> "wss://" + base.substringAfter("://")
+            base.startsWith("wss://", true) -> base
+            else -> {
+                relayConnecting.set(false)
+                setStatus("يجب أن يبدأ عنوان خادم وصلة بـ https:// أو wss://")
+                return
             }
         }
+        val request = try {
+            Request.Builder().url("$wsBase/connect/$deviceId")
+                .header("X-Wasla-Role", "mobile")
+                .header("X-Wasla-Pairing-Code", code)
+                .build()
+        } catch (e: Exception) {
+            relayConnecting.set(false)
+            setStatus("عنوان خادم الربط غير صالح")
+            return
+        }
+        relaySocket?.close(1000, "Reconnect")
+        relaySocket = relayClient.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                relayConnecting.set(false)
+                setStatus("اتصال وصلة عبر الإنترنت جاهز")
+            }
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                try {
+                    val msg = JSONObject(text)
+                    when (msg.optString("type")) {
+                        "action_result" -> setStatus(if (msg.optString("result") == "ACTION_OK")
+                            "تم تنفيذ الأمر عبر الإنترنت" else "تعذر تنفيذ الأمر عبر الإنترنت: ${msg.optString("result")}")
+                        "peer-status" -> setStatus("انقطع اتصال مستقبل التلفاز عبر الإنترنت")
+                    }
+                } catch (_: Exception) { }
+            }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (relaySocket === webSocket) relaySocket = null
+                relayConnecting.set(false)
+                setStatus("تعذر الاتصال بخادم وصلة عبر الإنترنت")
+            }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (relaySocket === webSocket) relaySocket = null
+                relayConnecting.set(false)
+            }
+        })
+    }
+
+    private fun disconnectWaslaRelay() {
+        try { relaySocket?.close(1000, "Relay disabled") } catch (_: Exception) { }
+        relaySocket = null
+    }
+
+    /** Sends an allow-listed action over local TCP or the authenticated WSS relay. */
+    private fun sendWaslaAction(command: String): Boolean {
+        synchronized(waslaTvLock) {
+            val socket = waslaTvSocket
+            val out = waslaTvOutput
+            if (socket != null && out != null && !socket.isClosed && socket.isConnected) {
+                try {
+                    out.write("ACTION $command\n".toByteArray(Charsets.UTF_8))
+                    out.flush()
+                    return true
+                } catch (_: Exception) {
+                    closeWaslaReceiver()
+                }
+            }
+        }
+        val relay = relaySocket ?: return false
+        if (relayMessageId.get() < 0L) return false
+        val payload = JSONObject().put("type", "action")
+            .put("id", relayMessageId.incrementAndGet().toString())
+            .put("command", command).toString()
+        return try { relay.send(payload) } catch (_: Exception) { false }
     }
 
     private fun sendWaslaTap(x: Float, y: Float): Boolean {
