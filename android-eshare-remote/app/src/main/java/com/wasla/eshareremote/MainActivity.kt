@@ -26,6 +26,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.widget.*
+import com.google.zxing.integration.android.IntentIntegrator
 import java.io.OutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -654,6 +655,15 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
+            IntentIntegrator.REQUEST_CODE -> {
+                if (resultCode == RESULT_OK) {
+                    val contents = data?.getStringExtra("SCAN_RESULT")
+                    if (!contents.isNullOrBlank()) handleWaslaQr(contents)
+                    else setStatus("لم يتم العثور على بيانات داخل رمز QR")
+                } else {
+                    setStatus("تم إلغاء مسح رمز QR")
+                }
+            }
             702 -> {
                 if (resultCode == RESULT_OK) {
                     val uri = data?.data ?: return
@@ -1479,28 +1489,70 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(8), dp(20), 0)
         }
+        val scan = Button(this).apply {
+            text = "مسح رمز QR من شاشة التلفاز"
+            isAllCaps = false
+            setOnClickListener {
+                try {
+                    IntentIntegrator(this@MainActivity)
+                        .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                        .setPrompt("وجّه الكاميرا إلى رمز وصلة TV")
+                        .setBeepEnabled(false)
+                        .setOrientationLocked(false)
+                        .initiateScan()
+                } catch (e: Exception) {
+                    setStatus("تعذر فتح ماسح QR: ${e.message ?: "تحقق من الكاميرا"}")
+                }
+            }
+        }
         val ip = EditText(this).apply {
-            hint = "عنوان IP للتلفاز (مثال 192.168.1.20)"
+            hint = "عنوان IP للتلفاز (اتصال يدوي)"
             setSingleLine(true)
             setText(prefs.getString("wasla_tv_ip", ""))
         }
         val code = EditText(this).apply {
-            hint = "رمز الاقتران الظاهر على التلفاز"
+            hint = "رمز الاقتران (6 أرقام)"
             setSingleLine(true)
             inputType = android.text.InputType.TYPE_CLASS_NUMBER
             setText(prefs.getString("wasla_tv_code", ""))
         }
+        fields.addView(scan)
+        fields.addView(TextView(this).apply {
+            text = "أو أدخل البيانات يدوياً"
+            gravity = Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(6))
+        })
         fields.addView(ip)
         fields.addView(code)
         AlertDialog.Builder(this)
-            .setTitle("ربط مستقبل وصلة")
-            .setMessage("افتح Wasla TV على التلفاز، ثم أدخل عنوان الشبكة ورمز الاقتران الظاهرين على الشاشة.")
+            .setTitle("إضافة شاشة وصلة")
+            .setMessage("افتح وصلة TV على الشاشة، ثم امسح رمز QR الظاهر عليها. يجب أن يكون الهاتف والتلفاز على الشبكة المحلية نفسها.")
             .setView(fields)
             .setNegativeButton("إلغاء", null)
-            .setPositiveButton("اتصال") { _, _ ->
+            .setPositiveButton("اتصال يدوي") { _, _ ->
                 connectWaslaReceiver(ip.text.toString().trim(), code.text.toString().trim())
             }
             .show()
+    }
+
+    private fun handleWaslaQr(raw: String) {
+        try {
+            val uri = android.net.Uri.parse(raw)
+            if (uri.scheme != "wasla" || uri.host != "pair") {
+                throw IllegalArgumentException("رمز QR ليس رمز اقتران وصلة")
+            }
+            val ip = uri.getQueryParameter("ip").orEmpty()
+            val code = uri.getQueryParameter("code").orEmpty()
+            val port = uri.getQueryParameter("port")?.toIntOrNull()
+            val deviceId = uri.getQueryParameter("id").orEmpty()
+            if (ip.isBlank() || port != 38471 || !code.matches(Regex("\\d{6}")) || deviceId.isBlank()) {
+                throw IllegalArgumentException("بيانات الاقتران غير مكتملة أو غير صالحة")
+            }
+            setStatus("تمت قراءة رمز الشاشة — جارٍ الاقتران...")
+            connectWaslaReceiver(ip, code)
+        } catch (e: Exception) {
+            setStatus("تعذر قراءة رمز وصلة: ${e.message ?: "رمز غير صالح"}")
+        }
     }
 
     private fun connectWaslaReceiver(ip: String, code: String) {
