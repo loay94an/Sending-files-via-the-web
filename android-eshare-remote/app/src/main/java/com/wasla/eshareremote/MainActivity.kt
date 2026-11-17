@@ -47,6 +47,7 @@ class MainActivity : Activity() {
     private val socketReader = Executors.newSingleThreadExecutor()
     private val gyroPositionLock = Any()
     private val socketWriteLock = Any()
+    private val socketReadLock = Any()
     // EShare framebuffer dimensions are queried from GETFBINFO after connecting.
     private var framebufferWidth = 1280f
     private var framebufferHeight = 720f
@@ -218,18 +219,9 @@ class MainActivity : Activity() {
             }
         }
         textEntry.addView(sendTextButton, LinearLayout.LayoutParams(dp(76), dp(42)))
-        var previousTextLength = 0
-        textInput.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
-                previousTextLength = s?.length ?: 0
-            }
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                if (!suppressTextWatcher) {
-                    sendComposingText(previousTextLength, s?.toString().orEmpty())
-                }
-            }
-        })
+        // Keep typing local on the phone. Send a complete UTF-8 composing + commit
+        // sequence only when Send is pressed, avoiding stale composing indexes and
+        // asynchronous per-keystroke packets that could arrive out of order.
         textInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE ||
                 actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
@@ -577,20 +569,23 @@ class MainActivity : Activity() {
             layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
         for (slot in 1..3) {
-            val savedLabel = prefs.getString("app_shortcut_${slot}_label", null)
-            val shortcutButton = makeButton(savedLabel ?: "＋\nتطبيق $slot", 58).apply {
-                textSize = 12f
-                setOnClickListener { launchAppShortcut(slot) }
+            val savedLabel = prefs.getString("tv_app_shortcut_${slot}_label", null)
+            val shortcutButton = makeButton(savedLabel ?: "＋", 44).apply {
+                textSize = 10f
+                maxLines = 1
+                setPadding(dp(2), dp(2), dp(2), dp(2))
+                contentDescription = savedLabel ?: "اضغط مطولاً لاختيار تطبيق من التلفاز"
+                setOnClickListener { launchTvAppShortcut(slot) }
                 setOnLongClickListener {
-                    configureAppShortcut(slot, this)
+                    chooseTvAppShortcut(slot, this)
                     true
                 }
             }
-            appShortcuts.addView(shortcutButton, LinearLayout.LayoutParams(0, dp(58), 1f).apply {
-                if (slot > 1) setMargins(dp(4), 0, 0, 0)
+            appShortcuts.addView(shortcutButton, LinearLayout.LayoutParams(dp(48), dp(44)).apply {
+                if (slot > 1) setMargins(dp(3), 0, 0, 0)
             })
         }
-        val airToggle = makeButton("⌁  الماوس الهوائي", 58, true).apply {
+        val airToggle = makeButton("⌁ الهوائي", 44, true).apply {
             textSize = 14f
             isEnabled = gyroSensor != null
             if (gyroSensor == null) text = "مستشعر الحركة غير متاح"
@@ -611,11 +606,11 @@ class MainActivity : Activity() {
                 setStatus(if (airMouseEnabled) "الماوس الهوائي مفعّل — اللوحة للتنقل والاختيار" else "التحكم بلوحة اللمس")
             }
         }
-        bottom.addView(airToggle, LinearLayout.LayoutParams(-1, dp(58)))
-        // Three configurable app shortcuts replace the voice-control button.
+        bottom.addView(appShortcuts, LinearLayout.LayoutParams(dp(150), dp(48)).apply { marginEnd = dp(5) })
+        bottom.addView(airToggle, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginStart = dp(5) })
+        // Three small TV-app shortcuts share one horizontal line with the air-mouse toggle.
         root.addView(deck, LinearLayout.LayoutParams(-1, dp(174)).apply { topMargin = dp(3) })
-        root.addView(appShortcuts, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(5) })
-        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(3); bottomMargin = dp(5) })
+        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(50)).apply { topMargin = dp(3); bottomMargin = dp(5) })
 
         setContentView(root)
     }
@@ -700,52 +695,120 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun configureAppShortcut(slot: Int, button: Button) {
-        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val apps = packageManager.queryIntentActivities(launcherIntent, 0)
-            .mapNotNull { info ->
-                val packageName = info.activityInfo?.packageName ?: return@mapNotNull null
-                val label = info.loadLabel(packageManager)?.toString()?.takeIf { it.isNotBlank() } ?: packageName
-                packageName to label
+    private data class TvApp(val name: String, val packageName: String)
+
+    // EShare's original remote uses GETAPPINFOSEVNET and a little-endian
+    // length-prefixed binary list; STARTAPPEVNET launches the selected TV package.
+    private fun readTvAppList(): List<TvApp> {
+        val socket = tcp ?: throw IllegalStateException("التلفاز غير متصل")
+        synchronized(socketReadLock) {
+            socket.soTimeout = 5000
+            try {
+                synchronized(socketWriteLock) {
+                    val stream = output ?: throw IllegalStateException("جلسة التحكم غير جاهزة")
+                    stream.write("GETAPPINFOSEVNET\r\n1\r\n\r\n".toByteArray(Charsets.UTF_8))
+                    stream.flush()
+                }
+                val input = socket.getInputStream()
+                val header = ByteArray(4)
+                var got = 0
+                while (got < 4) {
+                    val count = input.read(header, got, 4 - got)
+                    if (count < 0) throw IllegalStateException("انقطع رد قائمة التطبيقات")
+                    got += count
+                }
+                fun intLe(bytes: ByteArray, offset: Int): Int =
+                    (bytes[offset].toInt() and 0xff) or
+                        ((bytes[offset + 1].toInt() and 0xff) shl 8) or
+                        ((bytes[offset + 2].toInt() and 0xff) shl 16) or
+                        ((bytes[offset + 3].toInt() and 0xff) shl 24)
+                val total = intLe(header, 0)
+                if (total !in 4..8_000_000) throw IllegalStateException("حجم قائمة التطبيقات غير صالح: $total")
+                val packet = ByteArray(total)
+                System.arraycopy(header, 0, packet, 0, 4)
+                got = 4
+                while (got < total) {
+                    val count = input.read(packet, got, total - got)
+                    if (count < 0) throw IllegalStateException("قائمة التطبيقات وصلت بشكل غير مكتمل")
+                    got += count
+                }
+                val apps = ArrayList<TvApp>()
+                var offset = 4
+                fun readField(): ByteArray {
+                    if (offset + 4 > total) throw IllegalStateException("بيانات التطبيقات غير مكتملة")
+                    val length = intLe(packet, offset)
+                    offset += 4
+                    if (length < 0 || length > total - offset) throw IllegalStateException("حقل تطبيق غير صالح")
+                    val bytes = packet.copyOfRange(offset, offset + length)
+                    offset += length
+                    return bytes
+                }
+                while (offset < total) {
+                    val name = readField().toString(Charsets.UTF_8)
+                    val packageName = readField().toString(Charsets.UTF_8)
+                    readField() // version name
+                    if (offset + 8 > total) throw IllegalStateException("بيانات إصدار التطبيق غير مكتملة")
+                    val versionCodeLength = intLe(packet, offset)
+                    offset += 4
+                    if (versionCodeLength < 0 || versionCodeLength > total - offset) throw IllegalStateException("إصدار تطبيق غير صالح")
+                    offset += versionCodeLength
+                    readField() // icon bytes
+                    if (name.isNotBlank() && packageName.isNotBlank()) apps.add(TvApp(name, packageName))
+                }
+                return apps.distinctBy { it.packageName }.sortedBy { it.name.lowercase(java.util.Locale.getDefault()) }
+            } finally {
+                try { socket.soTimeout = 250 } catch (_: Exception) { }
             }
-            .distinctBy { it.first }
-            .sortedBy { it.second.lowercase(java.util.Locale.getDefault()) }
-        if (apps.isEmpty()) {
-            Toast.makeText(this, "لم يتم العثور على تطبيقات قابلة للتشغيل", Toast.LENGTH_LONG).show()
-            return
         }
-        val labels = apps.map { it.second }.toTypedArray()
-        android.app.AlertDialog.Builder(this)
-            .setTitle("اختر تطبيقاً للاختصار $slot")
-            .setItems(labels) { _, which ->
-                val (packageName, label) = apps[which]
-                prefs.edit()
-                    .putString("app_shortcut_${slot}_pkg", packageName)
-                    .putString("app_shortcut_${slot}_label", label)
-                    .apply()
-                button.text = label
-                setStatus("تم تعيين $label للاختصار $slot")
-            }
-            .setNegativeButton("إلغاء", null)
-            .show()
     }
 
-    private fun launchAppShortcut(slot: Int) {
-        val packageName = prefs.getString("app_shortcut_${slot}_pkg", null)
+    private fun chooseTvAppShortcut(slot: Int, button: Button) {
+        setStatus("جارٍ جلب تطبيقات التلفاز...")
+        io.execute {
+            try {
+                val apps = readTvAppList()
+                runOnUiThread {
+                    if (apps.isEmpty()) {
+                        Toast.makeText(this, "لم يُرجع التلفاز قائمة تطبيقات", Toast.LENGTH_LONG).show()
+                        return@runOnUiThread
+                    }
+                    android.app.AlertDialog.Builder(this)
+                        .setTitle("اختر تطبيقاً من التلفاز للاختصار $slot")
+                        .setItems(apps.map { it.name }.toTypedArray()) { _, which ->
+                            val app = apps[which]
+                            prefs.edit()
+                                .putString("tv_app_shortcut_${slot}_pkg", app.packageName)
+                                .putString("tv_app_shortcut_${slot}_label", app.name)
+                                .apply()
+                            button.text = app.name
+                            button.contentDescription = "فتح تطبيق التلفاز ${app.name}"
+                            setStatus("تم تعيين ${app.name} للاختصار $slot")
+                        }
+                        .setNegativeButton("إلغاء", null)
+                        .show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this, "تعذر جلب تطبيقات التلفاز: ${e.message ?: "تحقق من الاتصال"}", Toast.LENGTH_LONG).show()
+                    setStatus("تعذر قراءة تطبيقات التلفاز")
+                }
+            }
+        }
+    }
+
+    private fun launchTvAppShortcut(slot: Int) {
+        val packageName = prefs.getString("tv_app_shortcut_${slot}_pkg", null)
         if (packageName.isNullOrBlank()) {
-            Toast.makeText(this, "اضغط مطولاً لاختيار تطبيق لهذا الزر", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "اضغط مطولاً لاختيار تطبيق من التلفاز", Toast.LENGTH_SHORT).show()
             return
         }
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-        if (launchIntent == null) {
-            Toast.makeText(this, "التطبيق المحدد لم يعد مثبتاً؛ اضغط مطولاً لاختيار غيره", Toast.LENGTH_LONG).show()
-            return
-        }
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        try {
-            startActivity(launchIntent)
-        } catch (e: Exception) {
-            Toast.makeText(this, "تعذر فتح التطبيق: ${e.message ?: "خطأ غير معروف"}", Toast.LENGTH_LONG).show()
+        io.execute {
+            try {
+                writePacketWithReconnect("STARTAPPEVNET\r\n$packageName\r\n\r\n")
+                setStatus("تم إرسال أمر فتح التطبيق إلى التلفاز")
+            } catch (e: Exception) {
+                setStatus("تعذر فتح التطبيق: ${e.message ?: "تحقق من الاتصال"}")
+            }
         }
     }
 
@@ -1333,8 +1396,10 @@ class MainActivity : Activity() {
         if (text.isBlank()) return
         io.execute {
             try {
-                writePacketWithReconnect("CONTENT\r\n1\r\n0 $text\r\n\r\n")
-                setStatus("تم إرسال النص إلى التلفاز")
+                // EShare keyboard expects composing text followed by a commit.
+                // Send both packets in order on the same socket write queue.
+                writePacketWithReconnect("CONTENT\r\n0\r\n0 $text\r\n\r\nCONTENT\r\n1\r\n0 $text\r\n\r\n")
+                setStatus("أُرسل النص إلى التلفاز")
             } catch (e: Exception) {
                 setStatus("تعذر إرسال النص: " + (e.message ?: "تحقق من الاتصال"))
             }
@@ -1353,7 +1418,8 @@ class MainActivity : Activity() {
                 val buffer = ByteArray(1024)
                 while (!socket.isClosed && !Thread.currentThread().isInterrupted) {
                     try {
-                        val count = input.read(buffer)
+                        socket.soTimeout = 250
+                        val count = synchronized(socketReadLock) { input.read(buffer) }
                         if (count < 0) {
                             disconnected = true
                             break
