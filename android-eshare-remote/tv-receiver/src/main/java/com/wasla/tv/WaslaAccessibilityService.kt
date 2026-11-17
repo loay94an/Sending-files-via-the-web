@@ -7,6 +7,7 @@ import android.media.AudioManager
 import android.os.Bundle
 import android.os.Build
 import android.util.Base64
+import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -58,6 +59,11 @@ class WaslaAccessibilityService : AccessibilityService() {
     }
 
     fun key(name: String): Boolean = when (name.uppercase()) {
+        "DPAD_UP" -> moveFocus(View.FOCUS_UP)
+        "DPAD_DOWN" -> moveFocus(View.FOCUS_DOWN)
+        "DPAD_LEFT" -> moveFocus(View.FOCUS_LEFT)
+        "DPAD_RIGHT" -> moveFocus(View.FOCUS_RIGHT)
+        "SELECT" -> selectFocused()
         "BACK" -> performGlobalAction(GLOBAL_ACTION_BACK)
         "HOME" -> performGlobalAction(GLOBAL_ACTION_HOME)
         "RECENTS" -> performGlobalAction(GLOBAL_ACTION_RECENTS)
@@ -67,6 +73,24 @@ class WaslaAccessibilityService : AccessibilityService() {
         "VOLUME_DOWN" -> adjustVolume(AudioManager.ADJUST_LOWER)
         "MUTE" -> if (Build.VERSION.SDK_INT >= 23) adjustVolume(AudioManager.ADJUST_TOGGLE_MUTE) else false
         else -> false
+    }
+
+    private fun moveFocus(direction: Int): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val current = root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            ?: root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: root
+        val next = current.focusSearch(direction) ?: return false
+        return next.performAction(AccessibilityNodeInfo.ACTION_FOCUS) ||
+            next.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+    }
+
+    private fun selectFocused(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            ?: root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: return false
+        return focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }
 
     private fun adjustVolume(direction: Int): Boolean {
