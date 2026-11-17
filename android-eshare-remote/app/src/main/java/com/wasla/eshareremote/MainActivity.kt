@@ -998,7 +998,7 @@ class MainActivity : Activity() {
                                 else -> 0
                             }
                         }
-                        val response = "HTTP/1.1 200 OK\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n"
+                        val response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                         client.getOutputStream().write(response.toByteArray(Charsets.US_ASCII))
                         client.getOutputStream().flush()
                     }
@@ -1040,14 +1040,14 @@ class MainActivity : Activity() {
         gyroCursorY = framebufferHeight / 2f
 
         try {
-            handshakeWrite(socket, "getFeatures\\r\\nBoxlightPro\\r\\n\\r\\n")
+            handshakeWrite(socket, "getFeatures\r\nBoxlightPro\r\n\r\n")
             handshakeRead(socket, 1200)
-            handshakeWrite(socket, "auth\\r\\n${android.os.Environment.getExternalStorageDirectory().absolutePath} $httpPort onelong\\r\\n\\r\\n")
-            handshakeWrite(socket, "getServerInfo\\r\\n1\\r\\n\\r\\n")
+            handshakeWrite(socket, "auth\r\n${android.os.Environment.getExternalStorageDirectory().absolutePath} $httpPort onelong\r\n\r\n")
+            handshakeWrite(socket, "getServerInfo\r\n1\r\n\r\n")
             handshakeRead(socket, 1800)
-            handshakeWrite(socket, "GETFBINFO\\r\\n1\\r\\n\\r\\n")
+            handshakeWrite(socket, "GETFBINFO\r\n1\r\n\r\n")
             val fbInfo = handshakeRead(socket, 1800).trim()
-            val dimensions = fbInfo.split(Regex("\\r?\\n"))
+            val dimensions = fbInfo.split(Regex("\r?\n"))
             val width = dimensions.getOrNull(0)?.trim()?.toFloatOrNull()
             val height = dimensions.getOrNull(1)?.trim()?.toFloatOrNull()
             if (width != null && height != null && width > 0f && height > 0f) {
