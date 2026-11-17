@@ -418,6 +418,18 @@ class WaslaLocalServerService : Service() {
         val ok = try {
             when (p[0]) {
                 "KEY" -> p.size == 2 && WaslaAccessibilityService.key(p[1])
+                "MOVE" -> {
+                    if (p.size != 3) false else {
+                        val nx = p[1].toFloat()
+                        val ny = p[2].toFloat()
+                        val metrics = resources.displayMetrics
+                        nx in 0f..10000f && ny in 0f..10000f &&
+                            WaslaAccessibilityService.movePointer(
+                                nx / 10000f * metrics.widthPixels,
+                                ny / 10000f * metrics.heightPixels
+                            )
+                    }
+                }
                 "TAP" -> {
                     if (p.size != 3) false else {
                         val nx = p[1].toFloat()
