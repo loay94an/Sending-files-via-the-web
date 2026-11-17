@@ -1,5 +1,6 @@
 package com.wasla.tv
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
 import android.view.Gravity
@@ -11,6 +12,10 @@ import android.graphics.Bitmap
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import android.widget.TextView
+import android.net.Uri
+import java.net.HttpURLConnection
+import java.net.URL
+import org.json.JSONObject
 
 class TvReceiverActivity : Activity() {
     private lateinit var status: TextView
@@ -61,33 +66,46 @@ class TvReceiverActivity : Activity() {
         }
         root.addView(address, match())
         root.addView(TextView(this).apply {
-            text = "امسح رمز QR من تطبيق وصلة على الهاتف للاقتران تلقائياً"
-            textSize = 18f
+            text = "امسح أحد الرمزين: الأول لربط الهاتف بالتلفاز، والثاني لتنزيل تطبيق وصلة للهاتف"
+            textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(0xffa8bdd7.toInt())
         }, match())
-        val qrPayload = android.net.Uri.Builder()
+        val pairPayload = Uri.Builder()
             .scheme("wasla").authority("pair")
             .appendQueryParameter("ip", WaslaLocalServerService.localIpv4())
             .appendQueryParameter("port", WaslaLocalServerService.PORT.toString())
             .appendQueryParameter("code", WaslaLocalServerService.pairCode(this))
             .appendQueryParameter("id", WaslaLocalServerService.deviceId(this))
             .build().toString()
-        val qrBitmap = try {
-            val matrix = QRCodeWriter().encode(qrPayload, BarcodeFormat.QR_CODE, 480, 480)
-            Bitmap.createBitmap(480, 480, Bitmap.Config.ARGB_8888).also { bitmap ->
-                for (x in 0 until 480) for (y in 0 until 480) {
-                    bitmap.setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
-                }
+        val mobileDownloadUrl = "https://github.com/loay94an/wasla/releases/latest"
+        val qrRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
+        fun qrColumn(label: String, payload: String, description: String): LinearLayout {
+            return LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                addView(TextView(this@TvReceiverActivity).apply {
+                    text = label
+                    textSize = 16f
+                    gravity = Gravity.CENTER
+                    setTextColor(0xfff4f8ff.toInt())
+                }, LinearLayout.LayoutParams(-1, dp(32)))
+                addView(createQrImage(payload, description, 190),
+                    LinearLayout.LayoutParams(dp(190), dp(190)))
             }
-        } catch (_: Exception) { null }
-        root.addView(ImageView(this).apply {
-            setImageBitmap(qrBitmap)
-            setBackgroundColor(android.graphics.Color.WHITE)
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            contentDescription = "رمز QR لاقتران الهاتف بالتلفاز"
-            scaleType = ImageView.ScaleType.FIT_CENTER
-        }, LinearLayout.LayoutParams(dp(260), dp(260)).apply { gravity = Gravity.CENTER; bottomMargin = dp(10) })
+        }
+        qrRow.addView(qrColumn("① اتصال الهاتف", pairPayload, "رمز اقتران وصلة بالتلفاز"),
+            LinearLayout.LayoutParams(dp(205), -2).apply { marginEnd = dp(8) })
+        qrRow.addView(qrColumn("② تنزيل تطبيق الهاتف", mobileDownloadUrl, "رمز تنزيل تطبيق وصلة للهاتف"),
+            LinearLayout.LayoutParams(dp(205), -2).apply { marginStart = dp(8) })
+        root.addView(qrRow, LinearLayout.LayoutParams(-1, -2).apply {
+            gravity = Gravity.CENTER
+            bottomMargin = dp(8)
+        })
         root.addView(TextView(this).apply {
             text = "أو أدخل الرمز يدوياً: " + WaslaLocalServerService.pairCode(this@TvReceiverActivity)
             textSize = 17f
@@ -107,13 +125,99 @@ class TvReceiverActivity : Activity() {
             setTextColor(0xffa8bdd7.toInt())
             setPadding(0, 18, 0, 18)
         }, match())
-        root.addView(Button(this).apply {
-            text = "إعادة تشغيل خادم وصلة"
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        actions.addView(Button(this).apply {
+            text = "إعادة تشغيل الخادم"
             isAllCaps = false
             setOnClickListener { startServer(); status.text = "تم طلب تشغيل الخدمة" }
-        }, match())
+        }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6) })
+        actions.addView(Button(this).apply {
+            text = "تحديث التطبيق"
+            isAllCaps = false
+            setOnClickListener { checkForUpdates() }
+        }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) })
+        root.addView(actions, match())
         setContentView(root)
     }
+    private fun createQrImage(payload: String, description: String, size: Int): ImageView {
+        val bitmap = try {
+            val matrix = QRCodeWriter().encode(payload, BarcodeFormat.QR_CODE, size, size)
+            Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { image ->
+                for (x in 0 until size) for (y in 0 until size) {
+                    image.setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+                }
+            }
+        } catch (_: Exception) { null }
+        return ImageView(this).apply {
+            setImageBitmap(bitmap)
+            setBackgroundColor(android.graphics.Color.WHITE)
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            contentDescription = description
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+    }
+
+    private fun checkForUpdates() {
+        status.text = "جارٍ التحقق من تحديث مستقبل وصلة..."
+        Thread({
+            var latestVersion = ""
+            var downloadUrl = "https://github.com/loay94an/wasla/releases/latest"
+            var errorMessage: String? = null
+            try {
+                val connection = (URL("https://api.github.com/repos/loay94an/wasla/releases/latest").openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 7000
+                    readTimeout = 7000
+                    requestMethod = "GET"
+                    setRequestProperty("Accept", "application/vnd.github+json")
+                    setRequestProperty("User-Agent", "Wasla-TV-Android")
+                }
+                try {
+                    if (connection.responseCode == 200) {
+                        val release = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                        latestVersion = release.optString("tag_name", "").removePrefix("v")
+                        val assets = release.optJSONArray("assets")
+                        if (assets != null) {
+                            for (i in 0 until assets.length()) {
+                                val asset = assets.optJSONObject(i) ?: continue
+                                if (asset.optString("name").startsWith("wasla-tv-receiver") &&
+                                    asset.optString("name").endsWith(".apk")) {
+                                    downloadUrl = asset.optString("browser_download_url", downloadUrl)
+                                    break
+                                }
+                            }
+                        }
+                    } else {
+                        errorMessage = "لا توجد نسخة منشورة بعد أو تعذر الوصول إلى صفحة الإصدارات."
+                    }
+                } finally { connection.disconnect() }
+            } catch (_: Exception) {
+                errorMessage = "تعذر الاتصال بخدمة التحديث. تحقق من الإنترنت وحاول مجدداً."
+            }
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                val current = BuildConfig.VERSION_NAME.removePrefix("v")
+                val hasNew = latestVersion.isNotBlank() && latestVersion != current
+                val message = when {
+                    errorMessage != null -> errorMessage!!
+                    hasNew -> "تتوفر نسخة أحدث: $latestVersion\nالإصدار المثبت: $current"
+                    else -> "أنت تستخدم أحدث إصدار منشور ($current)."
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("تحديث مستقبل وصلة")
+                    .setMessage(message)
+                    .setPositiveButton(if (hasNew) "تنزيل التحديث" else "فتح صفحة الإصدارات") { _, _ ->
+                        try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl))) }
+                        catch (_: Exception) { status.text = "تعذر فتح رابط التحديث" }
+                    }
+                    .setNegativeButton("إغلاق", null)
+                    .show()
+            }
+        }, "wasla-tv-update-check").start()
+    }
+
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun match() = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 18 }
 }
