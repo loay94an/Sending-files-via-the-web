@@ -27,6 +27,8 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
@@ -57,6 +59,8 @@ class MainActivity : Activity() {
     private var pendingTouchDy = 0f
     private var tcp: Socket? = null
     private var output: OutputStream? = null
+    @Volatile private var localHttpServer: ServerSocket? = null
+    @Volatile private var localHttpThread: Thread? = null
     private var discoveryLock: WifiManager.MulticastLock? = null
     private lateinit var sensorManager: SensorManager
     private var gyroSensor: Sensor? = null
@@ -957,11 +961,75 @@ class MainActivity : Activity() {
         }
     }
 
-    // Keep the same direct EShare TCP session used by the earlier working remote.
-    // Do not run optional feature negotiation/auth here: on several EShare builds
-    // those reads consume the following replies and leave the control channel out of sync.
+    // EShare requires a small feature/auth handshake before keyboard CONTENT
+    // packets are accepted. Complete request/response reads BEFORE starting the
+    // background socket reader so it cannot steal handshake replies.
+    private fun ensureLocalHttpServer(): Int {
+        localHttpServer?.let { if (!it.isClosed) return it.localPort }
+        val server = try {
+            ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(8888))
+            }
+        } catch (_: Exception) {
+            ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(0))
+            }
+        }
+        localHttpServer = server
+        localHttpThread = Thread({
+            while (!server.isClosed) {
+                try {
+                    server.accept().use { client ->
+                        client.soTimeout = 1200
+                        val input = client.getInputStream()
+                        var matched = 0
+                        var count = 0
+                        while (count++ < 8192 && matched < 4) {
+                            val b = input.read()
+                            if (b < 0) break
+                            matched = when {
+                                matched == 0 && b == 13 -> 1
+                                matched == 1 && b == 10 -> 2
+                                matched == 2 && b == 13 -> 3
+                                matched == 3 && b == 10 -> 4
+                                b == 13 -> 1
+                                else -> 0
+                            }
+                        }
+                        val response = "HTTP/1.1 200 OK\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n"
+                        client.getOutputStream().write(response.toByteArray(Charsets.US_ASCII))
+                        client.getOutputStream().flush()
+                    }
+                } catch (_: Exception) {
+                    if (server.isClosed) break
+                }
+            }
+        }, "wasla-eshare-http").apply { isDaemon = true; start() }
+        return server.localPort
+    }
+
+    private fun handshakeRead(socket: Socket, timeoutMs: Int = 1800): String {
+        socket.soTimeout = timeoutMs
+        return try {
+            val buffer = ByteArray(4096)
+            val count = socket.getInputStream().read(buffer)
+            if (count > 0) String(buffer, 0, count, Charsets.UTF_8) else ""
+        } catch (_: SocketTimeoutException) {
+            ""
+        }
+    }
+
+    private fun handshakeWrite(socket: Socket, packet: String) {
+        val stream = socket.getOutputStream()
+        stream.write(packet.toByteArray(Charsets.UTF_8))
+        stream.flush()
+    }
+
     private fun connect(device: Device) = synchronized(connectionLock) {
         closeConnection()
+        val httpPort = ensureLocalHttpServer()
         val socket = Socket()
         socket.connect(InetSocketAddress(device.ip, device.port), 4000)
         socket.tcpNoDelay = true
@@ -970,6 +1038,29 @@ class MainActivity : Activity() {
         prefs.edit().putString("ip", device.ip).putInt("port", device.port).apply()
         gyroCursorX = framebufferWidth / 2f
         gyroCursorY = framebufferHeight / 2f
+
+        try {
+            handshakeWrite(socket, "getFeatures\\r\\nBoxlightPro\\r\\n\\r\\n")
+            handshakeRead(socket, 1200)
+            handshakeWrite(socket, "auth\\r\\n${android.os.Environment.getExternalStorageDirectory().absolutePath} $httpPort onelong\\r\\n\\r\\n")
+            handshakeWrite(socket, "getServerInfo\\r\\n1\\r\\n\\r\\n")
+            handshakeRead(socket, 1800)
+            handshakeWrite(socket, "GETFBINFO\\r\\n1\\r\\n\\r\\n")
+            val fbInfo = handshakeRead(socket, 1800).trim()
+            val dimensions = fbInfo.split(Regex("\\r?\\n"))
+            val width = dimensions.getOrNull(0)?.trim()?.toFloatOrNull()
+            val height = dimensions.getOrNull(1)?.trim()?.toFloatOrNull()
+            if (width != null && height != null && width > 0f && height > 0f) {
+                framebufferWidth = width
+                framebufferHeight = height
+                gyroCursorX = width / 2f
+                gyroCursorY = height / 2f
+            }
+        } catch (_: Exception) {
+            // Keep the remote usable on firmware that omits one optional handshake reply.
+        } finally {
+            try { socket.soTimeout = 0 } catch (_: Exception) { }
+        }
         startSocketReader(socket)
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
     }
@@ -1243,6 +1334,8 @@ class MainActivity : Activity() {
         gestureHandler.removeCallbacksAndMessages(null)
         connectionMonitor.shutdownNow()
         closeConnection()
+        try { localHttpServer?.close() } catch (_: Exception) { }
+        localHttpServer = null
         io.shutdownNow()
         airMouseIo.shutdownNow()
         socketReader.shutdownNow()
