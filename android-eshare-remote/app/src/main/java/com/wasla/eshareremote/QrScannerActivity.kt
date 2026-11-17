@@ -12,7 +12,6 @@ import android.view.SurfaceView
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.core.app.ActivityCompat
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
