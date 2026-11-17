@@ -579,16 +579,34 @@ class MainActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 702 && resultCode == RESULT_OK) {
-            val uri = data?.data ?: return
-            val share = Intent(Intent.ACTION_SEND).apply {
-                type = contentResolver.getType(uri) ?: "*/*"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                clipData = android.content.ClipData.newUri(contentResolver, "ملف للتلفاز", uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        when (requestCode) {
+            702 -> {
+                if (resultCode == RESULT_OK) {
+                    val uri = data?.data ?: return
+                    val share = Intent(Intent.ACTION_SEND).apply {
+                        type = contentResolver.getType(uri) ?: "*/*"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        clipData = android.content.ClipData.newUri(contentResolver, "ملف للتلفاز", uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    startActivity(Intent.createChooser(share, "إرسال الملف إلى تطبيق على التلفاز"))
+                    setStatus("اختر تطبيق استقبال الملفات على التلفاز إن كان مثبتاً")
+                }
             }
-            startActivity(Intent.createChooser(share, "إرسال الملف إلى تطبيق على التلفاز"))
-            setStatus("اختر تطبيق استقبال الملفات على التلفاز إن كان مثبتاً")
+            701 -> {
+                if (resultCode != RESULT_OK) {
+                    setStatus("تم إلغاء الاستماع أو لم يصل رد من خدمة الصوت")
+                    return
+                }
+                val spoken = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                    ?.firstOrNull()?.trim()
+                if (spoken.isNullOrBlank()) {
+                    setStatus("لم يتم التعرف على الكلام؛ حاول مجدداً")
+                } else {
+                    setStatus("تم التعرف: $spoken")
+                    processSpokenText(spoken)
+                }
+            }
         }
     }
 
@@ -627,35 +645,6 @@ class MainActivity : Activity() {
             startActivityForResult(intent, 701)
         } catch (e: Exception) {
             setStatus("لا توجد خدمة إدخال صوتي متاحة: ${e.message ?: "تحقق من تطبيق Google"}")
-        }
-    }
-
-    @Deprecated("Deprecated in Android API; retained for speech-recognition activity result")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != 701) return
-        if (resultCode != RESULT_OK) {
-            setStatus("تم إلغاء الاستماع أو لم يصل رد من خدمة الصوت")
-            return
-        }
-        val spoken = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-            ?.firstOrNull()?.trim()
-        if (spoken.isNullOrBlank()) {
-            setStatus("لم يتم التعرف على الكلام؛ حاول مجدداً")
-        } else {
-            setStatus("تم التعرف: $spoken")
-            processSpokenText(spoken)
-        }
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 703) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                beginSpeechRecognition()
-            } else {
-                setStatus("يجب السماح باستخدام الميكروفون لتشغيل التحكم الصوتي")
-            }
         }
     }
 
