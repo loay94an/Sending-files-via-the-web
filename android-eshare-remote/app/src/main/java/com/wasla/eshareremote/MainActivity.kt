@@ -58,14 +58,10 @@ class MainActivity : Activity() {
     private val networkRecoveryHandler = Handler(Looper.getMainLooper())
     @Volatile private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var lastDefaultNetwork: Network? = null
+    private val availableLocalNetworks = java.util.concurrent.ConcurrentHashMap.newKeySet<Network>()
     private val networkRecoveryTask = Runnable {
         val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val active = manager.activeNetwork
-        val caps = active?.let { manager.getNetworkCapabilities(it) }
-        val hasUsableNetwork = caps?.let {
-            it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-        } == true
+        val hasUsableNetwork = availableLocalNetworks.isNotEmpty()
         // A route change invalidates the old TCP socket, but never discard the
         // selected TV or start a subnet scan during automatic recovery.
         closeConnection()
@@ -270,7 +266,8 @@ class MainActivity : Activity() {
         }
         connectButton = makeButton("اتصال", 40, true).apply {
             textSize = 13f
-            setOnClickListener { discoverWaslaThenEShare() }
+            // Manual Connect always starts a fresh scan; automatic recovery stays pinned.
+            setOnClickListener { discoverWaslaThenEShare(interactive = true) }
             setOnLongClickListener {
                 discoverWaslaThenEShare(interactive = true)
                 true
@@ -1812,8 +1809,14 @@ class MainActivity : Activity() {
                 gyroCursorX = width / 2f
                 gyroCursorY = height / 2f
             }
-        } catch (_: Exception) {
-            // Keep the remote usable on firmware that omits one optional handshake reply.
+        } catch (e: Exception) {
+            // A failed socket write/handshake must never be reported as connected.
+            try { socket.close() } catch (_: Exception) { }
+            if (tcp === socket) {
+                tcp = null
+                output = null
+            }
+            throw e
         } finally {
             try { socket.soTimeout = 0 } catch (_: Exception) { }
         }
@@ -2450,6 +2453,7 @@ class MainActivity : Activity() {
         val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                availableLocalNetworks.add(network)
                 val previous = lastDefaultNetwork
                 lastDefaultNetwork = network
                 if (previous != null && previous != network) {
@@ -2459,27 +2463,41 @@ class MainActivity : Activity() {
                 }
             }
             override fun onLost(network: Network) {
+                availableLocalNetworks.remove(network)
                 if (lastDefaultNetwork == network) lastDefaultNetwork = null
-                scheduleNetworkRecovery("فُقد اتصال الشبكة")
+                // Losing mobile data must not tear down a local TV session.
+                if (availableLocalNetworks.isEmpty()) {
+                    scheduleNetworkRecovery("فُقد اتصال الشبكة المحلية")
+                }
             }
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-                if (network == lastDefaultNetwork && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && tcp == null && !reconnecting.get()) {
-                    scheduleNetworkRecovery("تغيّرت خصائص الشبكة")
+                val isLocal = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                if (isLocal) availableLocalNetworks.add(network)
+                else availableLocalNetworks.remove(network)
+                if (isLocal && tcp == null && !reconnecting.get()) {
+                    scheduleNetworkRecovery("عادت شبكة Wi-Fi المحلية")
                 }
             }
         }
         try {
-            if (android.os.Build.VERSION.SDK_INT >= 24) {
-                manager.registerDefaultNetworkCallback(callback)
-            } else {
-                // Local-only Wi-Fi still supports TV discovery without internet.
-                val request = NetworkRequest.Builder()
-                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                    .build()
-                manager.registerNetworkCallback(request, callback)
-            }
+            // Observe local transports directly; Wi-Fi without internet is still
+            // a valid route to a TV and must not be considered disconnected.
+            val request = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+                .build()
+            manager.registerNetworkCallback(request, callback)
             networkCallback = callback
-            lastDefaultNetwork = manager.activeNetwork
+            lastDefaultNetwork = null
+            for (network in manager.allNetworks) {
+                val caps = manager.getNetworkCapabilities(network)
+                if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true ||
+                    caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true) {
+                    availableLocalNetworks.add(network)
+                    lastDefaultNetwork = network
+                }
+            }
         } catch (e: Exception) {
             setStatus("تعذرت مراقبة تغيّر الشبكة: " + (e.message ?: "سيستمر البحث التلقائي"))
         }
@@ -2503,13 +2521,14 @@ class MainActivity : Activity() {
                         synchronized(socketWriteLock) {
                             if (tcp === socket && !socket.isClosed) {
                                 val stream = output ?: throw IllegalStateException("قناة التحكم مغلقة")
-                                stream.write("GETFBINFO\\r\\n1\\r\\n\\r\\n".toByteArray(Charsets.UTF_8))
+                                stream.write("GETFBINFO\r\n1\r\n\r\n".toByteArray(Charsets.UTF_8))
                                 stream.flush()
                                 lastEshareKeepAliveAt = now
                             }
                         }
                     } catch (_: Exception) {
                         closeConnection()
+                        nextReconnectAt = 0L
                         setStatus("انقطع الاتصال — جارٍ استعادته إلى الشاشة نفسها...")
                     }
                 }
