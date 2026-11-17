@@ -1560,7 +1560,7 @@ class MainActivity : Activity() {
                 }, "wasla-tv-link-reader").apply { isDaemon = true; start() }
             } catch (e: Exception) {
                 closeWaslaReceiver()
-                setStatus("تعذر الاتصال بمستقبل وصلة: \${e.message ?: "تحقق من IP والرمز"}")
+                setStatus("تعذر الاتصال بمستقبل وصلة: ${e.message ?: "تحقق من IP والرمز"}")
             }
         }
     }
