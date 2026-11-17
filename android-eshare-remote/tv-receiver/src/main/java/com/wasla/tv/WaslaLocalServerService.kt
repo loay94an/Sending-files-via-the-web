@@ -230,39 +230,48 @@ class WaslaLocalServerService : Service() {
                         val parts = command.split(' ')
                         when (parts.firstOrNull()) {
                             "PUT" -> {
-                                if (parts.size != 4) {
+                                if (parts.size != 5) {
                                     output.writeUTF("ERROR BAD_REQUEST")
                                 } else {
-                                    val name = String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
-                                    val mime = String(Base64.decode(parts[2], Base64.NO_WRAP), Charsets.UTF_8)
-                                    val size = parts[3].toLongOrNull()
+                                    val directory = parts[1]
+                                    val name = String(Base64.decode(parts[2], Base64.NO_WRAP), Charsets.UTF_8)
+                                    val mime = String(Base64.decode(parts[3], Base64.NO_WRAP), Charsets.UTF_8)
+                                    val size = parts[4].toLongOrNull()
                                     val root = selectedFolder()
-                                    if (root == null || !root.canWrite()) output.writeUTF("ERROR FOLDER_NOT_WRITABLE")
+                                    val targetFolder = if (directory == "ROOT") root else try {
+                                        val uri = Uri.parse(String(Base64.decode(directory, Base64.NO_WRAP), Charsets.UTF_8))
+                                        root?.let { findSharedDocument(uri, it) }
+                                    } catch (_: Exception) { null }
+                                    if (targetFolder == null || !targetFolder.isDirectory || !targetFolder.canWrite()) output.writeUTF("ERROR FOLDER_NOT_WRITABLE")
                                     else if (name.isBlank() || name == "." || name == ".." || name.contains('/') || name.contains('\\') || name.length > 240 ||
                                         size == null || size !in 0L..MAX_FILE_BYTES) output.writeUTF("ERROR INVALID_FILE")
+                                    else if (targetFolder.findFile(name) != null) output.writeUTF("ERROR FILE_EXISTS")
                                     else {
-                                        val created = if (root.findFile(name) == null)
-                                            root.createFile(mime.ifBlank { "application/octet-stream" }, name) else null
-                                        if (root.findFile(name) != null) output.writeUTF("ERROR FILE_EXISTS")
-                                        else if (created == null) output.writeUTF("ERROR CREATE_FAILED")
+                                        val created = targetFolder.createFile(mime.ifBlank { "application/octet-stream" }, name)
+                                        if (created == null) output.writeUTF("ERROR CREATE_FAILED")
                                         else {
                                             val target = contentResolver.openOutputStream(created.uri, "w")
                                             if (target == null) {
                                                 created.delete()
                                                 output.writeUTF("ERROR OPEN_FAILED")
                                             } else {
-                                                target.use { stream ->
-                                                    val buffer = ByteArray(32 * 1024)
-                                                    var remaining = size
-                                                    while (remaining > 0) {
-                                                        val count = minOf(buffer.size.toLong(), remaining).toInt()
-                                                        input.readFully(buffer, 0, count)
-                                                        stream.write(buffer, 0, count)
-                                                        remaining -= count
+                                                try {
+                                                    target.use { stream ->
+                                                        val buffer = ByteArray(32 * 1024)
+                                                        var remaining = size
+                                                        while (remaining > 0) {
+                                                            val count = minOf(buffer.size.toLong(), remaining).toInt()
+                                                            input.readFully(buffer, 0, count)
+                                                            stream.write(buffer, 0, count)
+                                                            remaining -= count
+                                                        }
+                                                        stream.flush()
                                                     }
-                                                    stream.flush()
+                                                    output.writeUTF("STORED")
+                                                } catch (e: Exception) {
+                                                    created.delete()
+                                                    throw e
                                                 }
-                                                output.writeUTF("STORED")
                                             }
                                         }
                                     }
