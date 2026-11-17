@@ -428,6 +428,16 @@ class MainActivity : Activity() {
                 textSize = dp(15).toFloat()
             }
             private var pressedSector = -1
+            private var okLongPressTriggered = false
+            private val okLongPress = Runnable {
+                if (pressedSector == 4 && !okLongPressTriggered) {
+                    okLongPressTriggered = true
+                    // Android TV context/options key. A normal short press remains DPAD_CENTER.
+                    sendKey(82)
+                    setStatus("تم طلب قائمة الخيارات")
+                    invalidate()
+                }
+            }
             private val keys = intArrayOf(19, 22, 20, 21)
             private val symbols = arrayOf("▲", "▶", "▼", "◀")
 
@@ -482,26 +492,40 @@ class MainActivity : Activity() {
                 }
                 when (event.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> {
+                        gestureHandler.removeCallbacks(okLongPress)
                         pressedSector = hitSector()
+                        okLongPressTriggered = false
+                        if (pressedSector == 4) gestureHandler.postDelayed(okLongPress, 600L)
                         invalidate()
                         return pressedSector >= 0
                     }
                     android.view.MotionEvent.ACTION_MOVE -> {
                         val next = hitSector()
-                        if (next != pressedSector) { pressedSector = next; invalidate() }
+                        if (next != pressedSector) {
+                            gestureHandler.removeCallbacks(okLongPress)
+                            pressedSector = next
+                            invalidate()
+                        }
                         return true
                     }
                     android.view.MotionEvent.ACTION_UP -> {
+                        gestureHandler.removeCallbacks(okLongPress)
                         val selected = hitSector()
                         val pressed = pressedSector
+                        val wasLongPress = okLongPressTriggered
                         pressedSector = -1
+                        okLongPressTriggered = false
                         invalidate()
-                        if (selected >= 0 && selected == pressed) sendKey(if (selected == 4) 23 else keys[selected])
+                        if (!wasLongPress && selected >= 0 && selected == pressed) {
+                            sendKey(if (selected == 4) 23 else keys[selected])
+                        }
                         performClick()
                         return true
                     }
                     android.view.MotionEvent.ACTION_CANCEL -> {
+                        gestureHandler.removeCallbacks(okLongPress)
                         pressedSector = -1
+                        okLongPressTriggered = false
                         invalidate()
                         return true
                     }
@@ -514,7 +538,7 @@ class MainActivity : Activity() {
                 return true
             }
         }.apply {
-            contentDescription = "أزرار الاتجاهات حول زر OK"
+            contentDescription = "أزرار الاتجاهات حول زر OK؛ اضغط مطولاً على OK لفتح الخيارات"
             isClickable = true
             elevation = dp(7).toFloat()
         }
@@ -615,16 +639,12 @@ class MainActivity : Activity() {
     private fun startVoiceRecognition() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar")
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-JO")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-JO")
             putExtra(RecognizerIntent.EXTRA_PROMPT, "تحدث الآن للتحكم بالتلفاز أو لإدخال نص")
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         }
         try {
-            if (intent.resolveActivity(packageManager) == null) {
-                setStatus("لا توجد خدمة تعرف صوتي مثبتة؛ فعّل الكتابة الصوتية من Google")
-                return
-            }
             setStatus("🎙 استمع الآن…")
             startActivityForResult(intent, 701)
         } catch (e: Exception) {
@@ -652,11 +672,10 @@ class MainActivity : Activity() {
                 val query = spoken.substringAfter("عن ").trim()
                 if (query.isNotBlank()) {
                     sendKey(84)
-                    gestureHandler.postDelayed({ sendComposingText(0, query); sendText(query) }, 900L)
+                    gestureHandler.postDelayed({ sendText(query) }, 900L)
                 }
             }
             else -> {
-                sendComposingText(0, spoken)
                 sendText(spoken)
             }
         }
