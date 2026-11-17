@@ -7,10 +7,10 @@ android {
     compileSdk = 35
     defaultConfig {
         applicationId = "com.wasla.tv"
-        minSdk = 23
+        minSdk = 21
         targetSdk = 28
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.1.1"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
