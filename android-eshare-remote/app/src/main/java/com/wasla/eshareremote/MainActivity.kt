@@ -781,12 +781,15 @@ class MainActivity : Activity() {
             // 1280x720 cursor position. AIRMOUSEEVNET is not the gyro protocol.
             // Remove stationary gyro bias, integrate angular velocity, and keep
             // the cursor position between packets instead of restarting at center.
-            val rateX = if (kotlin.math.abs(event.values[2]) < 0.015f) 0f else event.values[2]
-            val rateY = if (kotlin.math.abs(event.values[0]) < 0.015f) 0f else event.values[0]
-            val targetDx = -rateX * dt * 100f
-            val targetDy = -rateY * dt * 100f
-            smoothedGyroDx += (targetDx - smoothedGyroDx) * 0.45f
-            smoothedGyroDy += (targetDy - smoothedGyroDy) * 0.45f
+            val rateX = if (kotlin.math.abs(event.values[2]) < 0.008f) 0f else event.values[2]
+            val rateY = if (kotlin.math.abs(event.values[0]) < 0.008f) 0f else event.values[0]
+            // Increase cursor travel while retaining time-based integration so
+            // sensitivity stays consistent across different sensor sample rates.
+            val targetDx = -rateX * dt * 300f
+            val targetDy = -rateY * dt * 300f
+            // Faster response with enough filtering to avoid a jittery pointer.
+            smoothedGyroDx += (targetDx - smoothedGyroDx) * 0.65f
+            smoothedGyroDy += (targetDy - smoothedGyroDy) * 0.65f
             if (smoothedGyroDx != 0f || smoothedGyroDy != 0f) {
                 gyroCursorX = (gyroCursorX + smoothedGyroDx).coerceIn(0f, 1280f)
                 gyroCursorY = (gyroCursorY + smoothedGyroDy).coerceIn(0f, 720f)
