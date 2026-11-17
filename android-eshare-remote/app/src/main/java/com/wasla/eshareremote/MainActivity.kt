@@ -2110,11 +2110,15 @@ class MainActivity : Activity() {
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (relaySocket === webSocket) relaySocket = null
                 relayConnecting.set(false)
-                setStatus("تعذر الاتصال بخادم وصلة عبر الإنترنت")
+                setStatus("تعذر الاتصال بخادم وصلة عبر الإنترنت — ستتم إعادة المحاولة")
+                gestureHandler.postDelayed({ connectWaslaRelay() }, 8000L)
             }
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (relaySocket === webSocket) relaySocket = null
                 relayConnecting.set(false)
+                if (prefs.getString("relay_base_url", "").orEmpty().isNotBlank()) {
+                    gestureHandler.postDelayed({ connectWaslaRelay() }, 5000L)
+                }
             }
         })
     }
@@ -2320,6 +2324,9 @@ class MainActivity : Activity() {
         networkCallback = null
         connectionMonitor.shutdownNow()
         closeWaslaReceiver()
+        disconnectWaslaRelay()
+        relayClient.dispatcher.executorService.shutdown()
+        relayClient.connectionPool.evictAll()
         waslaLinkMonitor.shutdownNow()
         waslaLinkExecutor.shutdownNow()
         closeConnection()
