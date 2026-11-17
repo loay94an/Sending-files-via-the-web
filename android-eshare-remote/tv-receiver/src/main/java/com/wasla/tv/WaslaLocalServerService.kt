@@ -268,7 +268,7 @@ class WaslaLocalServerService : Service() {
             val writer = client.getOutputStream().bufferedWriter(Charsets.UTF_8)
             val hello = reader.readLine() ?: return
             val parts = hello.split(' ', limit = 3)
-            if (parts.size != 2 || parts[0] != "PAIR" || !constantTimeEquals(parts[1], pairCode(this))) {
+            if (parts.size != 2 || parts[0] != "PAIR" || !verifyPair(client, parts[1])) {
                 writer.write("DENIED\n"); writer.flush(); return
             }
             writer.write("OK WASLA-TV/1 $PORT\n"); writer.flush()
