@@ -852,8 +852,12 @@ class MainActivity : Activity() {
                     val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
                     connect(Device("التلفاز", ip, discoverPort(ip)))
                 }
-                output?.write("KEYEVENT\r\n$key\r\n\r\n".toByteArray(Charsets.UTF_8))
-                output?.flush()
+                // Pointer and key packets share one TCP stream. Serialize every write
+                // so a key event can never split an AIRMOUSEEVNET packet.
+                synchronized(socketWriteLock) {
+                    output?.write("KEYEVENT\r\n$key\r\n\r\n".toByteArray(Charsets.UTF_8))
+                    output?.flush()
+                }
             } catch (e: Exception) {
                 closeConnection()
                 setStatus("انقطع الاتصال: ${e.message ?: "أعد البحث"}")
