@@ -571,11 +571,25 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
-        val voice = makeButton("🎙  التحكم الصوتي", 58).apply {
-            textSize = 14f
-            setOnClickListener { startVoiceRecognition() }
+        val appShortcuts = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
-        bottom.addView(voice, LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginEnd = dp(5) })
+        for (slot in 1..3) {
+            val savedLabel = prefs.getString("app_shortcut_${slot}_label", null)
+            val shortcutButton = makeButton(savedLabel ?: "＋\nتطبيق $slot", 58).apply {
+                textSize = 12f
+                setOnClickListener { launchAppShortcut(slot) }
+                setOnLongClickListener {
+                    configureAppShortcut(slot, this)
+                    true
+                }
+            }
+            appShortcuts.addView(shortcutButton, LinearLayout.LayoutParams(0, dp(58), 1f).apply {
+                if (slot > 1) setMargins(dp(4), 0, 0, 0)
+            })
+        }
         val airToggle = makeButton("⌁  الماوس الهوائي", 58, true).apply {
             textSize = 14f
             isEnabled = gyroSensor != null
@@ -597,10 +611,11 @@ class MainActivity : Activity() {
                 setStatus(if (airMouseEnabled) "الماوس الهوائي مفعّل — اللوحة للتنقل والاختيار" else "التحكم بلوحة اللمس")
             }
         }
-        bottom.addView(airToggle, LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginStart = dp(5) })
-        // Put the main navigation keys at the bottom, as requested, with voice/air-mouse below them.
+        bottom.addView(airToggle, LinearLayout.LayoutParams(-1, dp(58)))
+        // Three configurable app shortcuts replace the voice-control button.
         root.addView(deck, LinearLayout.LayoutParams(-1, dp(174)).apply { topMargin = dp(3) })
-        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(5); bottomMargin = dp(5) })
+        root.addView(appShortcuts, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(5) })
+        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(3); bottomMargin = dp(5) })
 
         setContentView(root)
     }
@@ -682,6 +697,55 @@ class MainActivity : Activity() {
             else -> {
                 sendText(spoken)
             }
+        }
+    }
+
+    private fun configureAppShortcut(slot: Int, button: Button) {
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps = packageManager.queryIntentActivities(launcherIntent, 0)
+            .mapNotNull { info ->
+                val packageName = info.activityInfo?.packageName ?: return@mapNotNull null
+                val label = info.loadLabel(packageManager)?.toString()?.takeIf { it.isNotBlank() } ?: packageName
+                packageName to label
+            }
+            .distinctBy { it.first }
+            .sortedBy { it.second.lowercase(java.util.Locale.getDefault()) }
+        if (apps.isEmpty()) {
+            Toast.makeText(this, "لم يتم العثور على تطبيقات قابلة للتشغيل", Toast.LENGTH_LONG).show()
+            return
+        }
+        val labels = apps.map { it.second }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("اختر تطبيقاً للاختصار $slot")
+            .setItems(labels) { _, which ->
+                val (packageName, label) = apps[which]
+                prefs.edit()
+                    .putString("app_shortcut_${slot}_pkg", packageName)
+                    .putString("app_shortcut_${slot}_label", label)
+                    .apply()
+                button.text = label
+                setStatus("تم تعيين $label للاختصار $slot")
+            }
+            .setNegativeButton("إلغاء", null)
+            .show()
+    }
+
+    private fun launchAppShortcut(slot: Int) {
+        val packageName = prefs.getString("app_shortcut_${slot}_pkg", null)
+        if (packageName.isNullOrBlank()) {
+            Toast.makeText(this, "اضغط مطولاً لاختيار تطبيق لهذا الزر", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        if (launchIntent == null) {
+            Toast.makeText(this, "التطبيق المحدد لم يعد مثبتاً؛ اضغط مطولاً لاختيار غيره", Toast.LENGTH_LONG).show()
+            return
+        }
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(launchIntent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "تعذر فتح التطبيق: ${e.message ?: "خطأ غير معروف"}", Toast.LENGTH_LONG).show()
         }
     }
 
