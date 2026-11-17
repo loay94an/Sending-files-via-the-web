@@ -895,8 +895,8 @@ class MainActivity : Activity() {
         val y = gyroCursorY
         airMouseIo.execute {
             try {
-                writePointerPacket("GYROSCOPEEVENT\\r\\n$x\\r\\n$y\\r\\n0\\r\\n\\r\\n")
-                writePointerPacket("GYROSCOPEEVENT\\r\\n$x\\r\\n$y\\r\\n1\\r\\n\\r\\n")
+                writePointerPacket("GYROSCOPEEVENT\r\n$x\r\n$y\r\n0\r\n\r\n")
+                writePointerPacket("GYROSCOPEEVENT\r\n$x\r\n$y\r\n1\r\n\r\n")
             } catch (e: Exception) {
                 closeConnection()
                 setStatus("تعذر النقر: ${e.message ?: "أعد الاتصال"}")
