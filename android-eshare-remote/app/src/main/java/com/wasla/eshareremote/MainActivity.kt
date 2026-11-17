@@ -26,7 +26,6 @@ import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.widget.*
-import com.google.zxing.integration.android.IntentIntegrator
 import java.io.OutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -640,13 +639,13 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
-            IntentIntegrator.REQUEST_CODE -> {
+            8110 -> {
                 if (resultCode == RESULT_OK) {
-                    val contents = data?.getStringExtra("SCAN_RESULT")
+                    val contents = data?.getStringExtra(QrScannerActivity.EXTRA_RESULT)
                     if (!contents.isNullOrBlank()) handleWaslaQr(contents)
                     else setStatus("لم يتم العثور على بيانات داخل رمز QR")
                 } else {
-                    setStatus("تم إلغاء مسح رمز QR")
+                    setStatus("تم إلغاء مسح رمز QR أو لم يُمنح إذن الكاميرا")
                 }
             }
             702 -> {
@@ -1561,14 +1560,9 @@ class MainActivity : Activity() {
 
     private fun startWaslaQrScanner() {
         try {
-            IntentIntegrator(this)
-                .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-                .setPrompt("وجّه الكاميرا إلى رمز وصلة TV الظاهر على الشاشة")
-                .setBeepEnabled(false)
-                .setOrientationLocked(false)
-                .initiateScan()
+            startActivityForResult(Intent(this, QrScannerActivity::class.java), 8110)
         } catch (e: Exception) {
-            setStatus("تعذر فتح ماسح QR: ${e.message ?: "تحقق من إذن الكاميرا"}")
+            setStatus("تعذر فتح ماسح QR: ${e.message ?: "تحقق من الكاميرا"}")
         }
     }
 
