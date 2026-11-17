@@ -1836,6 +1836,11 @@ class MainActivity : Activity() {
 
     private fun sendKey(key: Int) {
         val waslaKey = when (key) {
+            19 -> "DPAD_UP"
+            20 -> "DPAD_DOWN"
+            21 -> "DPAD_LEFT"
+            22 -> "DPAD_RIGHT"
+            23 -> "SELECT"
             4 -> "BACK"
             3 -> "HOME"
             187 -> "RECENTS"
