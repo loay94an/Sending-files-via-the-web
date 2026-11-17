@@ -284,35 +284,15 @@ class MainActivity : Activity() {
         shortcuts.addView(filesButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(5) })
         root.addView(shortcuts, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(7); bottomMargin = dp(3) })
 
-        // Keep manual IP connection available without letting it dominate the design.
-        val connection = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        // One connection entry point: automatic discovery or QR pairing.
+        ipInput = EditText(this) // retained internally for discovered-IP compatibility; not shown in the main UI
+        connectButton = makeButton("اتصال", 48, true).apply {
+            textSize = 15f
+            setOnClickListener { showConnectionOptions() }
         }
-        ipInput = EditText(this).apply {
-            hint = "عنوان IP للتلفاز"
-            textSize = 13f
-            setSingleLine(true)
-            inputType = android.text.InputType.TYPE_CLASS_TEXT
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
-            setTextColor(white)
-            setHintTextColor(muted)
-            setPadding(dp(12), 0, dp(12), 0)
-            background = surface(0xff0c192d.toInt(), 14, 0xff263f61.toInt())
-        }
-        connection.addView(ipInput, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(7) })
-        connectButton = makeButton("اتصال", 40, true).apply {
-            textSize = 13f
-            setOnClickListener { discoverAndConnect(ipInput.text.toString().trim().ifEmpty { null }) }
-        }
-        connection.addView(connectButton, LinearLayout.LayoutParams(dp(82), dp(40)))
-        root.addView(connection, LinearLayout.LayoutParams(-1, dp(43)).apply {
-            topMargin = dp(7); bottomMargin = dp(3)
+        root.addView(connectButton, LinearLayout.LayoutParams(-1, dp(48)).apply {
+            topMargin = dp(7); bottomMargin = dp(5)
         })
-        root.addView(makeButton("ربط مستقبل وصلة على التلفاز", 40).apply {
-            setOnClickListener { showWaslaPairDialog() }
-        }, LinearLayout.LayoutParams(-1, dp(42)).apply { bottomMargin = dp(5) })
 
         val touchPad = FrameLayout(this).apply {
             background = surface(0xff102c50.toInt(), 25, 0xff168fd2.toInt())
@@ -1484,55 +1464,30 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showWaslaPairDialog() {
-        val fields = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), 0)
-        }
-        val scan = Button(this).apply {
-            text = "مسح رمز QR من شاشة التلفاز"
-            isAllCaps = false
-            setOnClickListener {
-                try {
-                    IntentIntegrator(this@MainActivity)
-                        .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-                        .setPrompt("وجّه الكاميرا إلى رمز وصلة TV")
-                        .setBeepEnabled(false)
-                        .setOrientationLocked(false)
-                        .initiateScan()
-                } catch (e: Exception) {
-                    setStatus("تعذر فتح ماسح QR: ${e.message ?: "تحقق من الكاميرا"}")
+    private fun showConnectionOptions() {
+        AlertDialog.Builder(this)
+            .setTitle("طريقة الاتصال")
+            .setItems(arrayOf("التعرّف التلقائي على الشاشة", "الاتصال بمسح رمز QR")) { _, choice ->
+                when (choice) {
+                    0 -> discoverAndConnect()
+                    1 -> startWaslaQrScanner()
                 }
             }
-        }
-        val ip = EditText(this).apply {
-            hint = "عنوان IP للتلفاز (اتصال يدوي)"
-            setSingleLine(true)
-            setText(prefs.getString("wasla_tv_ip", ""))
-        }
-        val code = EditText(this).apply {
-            hint = "رمز الاقتران (6 أرقام)"
-            setSingleLine(true)
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            setText(prefs.getString("wasla_tv_code", ""))
-        }
-        fields.addView(scan)
-        fields.addView(TextView(this).apply {
-            text = "أو أدخل البيانات يدوياً"
-            gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, dp(6))
-        })
-        fields.addView(ip)
-        fields.addView(code)
-        AlertDialog.Builder(this)
-            .setTitle("إضافة شاشة وصلة")
-            .setMessage("افتح وصلة TV على الشاشة، ثم امسح رمز QR الظاهر عليها. يجب أن يكون الهاتف والتلفاز على الشبكة المحلية نفسها.")
-            .setView(fields)
             .setNegativeButton("إلغاء", null)
-            .setPositiveButton("اتصال يدوي") { _, _ ->
-                connectWaslaReceiver(ip.text.toString().trim(), code.text.toString().trim())
-            }
             .show()
+    }
+
+    private fun startWaslaQrScanner() {
+        try {
+            IntentIntegrator(this)
+                .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                .setPrompt("وجّه الكاميرا إلى رمز وصلة TV الظاهر على الشاشة")
+                .setBeepEnabled(false)
+                .setOrientationLocked(false)
+                .initiateScan()
+        } catch (e: Exception) {
+            setStatus("تعذر فتح ماسح QR: ${e.message ?: "تحقق من إذن الكاميرا"}")
+        }
     }
 
     private fun handleWaslaQr(raw: String) {
