@@ -130,6 +130,19 @@ class WaslaLocalServerService : Service() {
                         )
                     }
                 }
+                "LONG_PRESS" -> {
+                    if (p.size != 4) false else {
+                        val nx = p[1].toFloat(); val ny = p[2].toFloat()
+                        val duration = p[3].toLong()
+                        val metrics = resources.displayMetrics
+                        nx in 0f..10000f && ny in 0f..10000f && duration in 500L..2000L &&
+                            WaslaAccessibilityService.longPress(
+                                nx / 10000f * metrics.widthPixels,
+                                ny / 10000f * metrics.heightPixels,
+                                duration
+                            )
+                    }
+                }
                 "SWIPE" -> {
                     if (p.size != 6) false else {
                         val nx1 = p[1].toFloat(); val ny1 = p[2].toFloat()
