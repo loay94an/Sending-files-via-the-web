@@ -3,6 +3,7 @@ package com.wasla.eshareremote
 import android.app.Activity
 import android.Manifest
 import android.os.Bundle
+import android.os.Environment
 import android.speech.SpeechRecognizer
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -1024,13 +1025,13 @@ class MainActivity : Activity() {
                     break
                 } catch (_: Exception) { }
             }
-            if (server == null) throw IllegalStateException("No local callback port available")
-            localHttpServer = server
-            localHttpPort = server.localPort
+            val activeServer = server ?: throw IllegalStateException("No local callback port available")
+            localHttpServer = activeServer
+            localHttpPort = activeServer.localPort
             Thread {
-                while (!server.isClosed) {
+                while (!activeServer.isClosed) {
                     try {
-                        val client = server.accept()
+                        val client = activeServer.accept()
                         Thread {
                             client.use { connection ->
                                 try {
