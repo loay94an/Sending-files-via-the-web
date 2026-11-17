@@ -1535,6 +1535,7 @@ class MainActivity : Activity() {
     }
 
     private fun sendGyroPosition(x: Float, y: Float) {
+        if (waslaTvSocket != null) return
         synchronized(gyroPositionLock) {
             pendingGyroPosition = x to y
             if (gyroPositionWriteQueued) return
@@ -1888,6 +1889,11 @@ class MainActivity : Activity() {
     private fun sendPointerHold(pressed: Boolean) {
         val x = gyroCursorX
         val y = gyroCursorY
+        if (pressed && waslaTvSocket != null) {
+            val nx = (x / framebufferWidth.coerceAtLeast(1f) * 10000f).toInt().coerceIn(0, 10000)
+            val ny = (y / framebufferHeight.coerceAtLeast(1f) * 10000f).toInt().coerceIn(0, 10000)
+            if (sendWaslaAction("LONG_PRESS $nx $ny 700")) return
+        } else if (!pressed && waslaTvSocket != null) return
         val action = if (pressed) 0 else 1
         airMouseIo.execute {
             try {
