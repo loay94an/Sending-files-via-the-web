@@ -69,7 +69,7 @@ class WaslaLocalServerService : Service() {
                     socket.receive(request)
                     val message = String(request.data, request.offset, request.length, Charsets.UTF_8).trim()
                     if (message != DISCOVERY_REQUEST) continue
-                    val response = "WASLA-TV-DISCOVER/1 ${deviceId(this)} ${localIpv4()} $PORT"
+                    val response = "WASLA-TV-DISCOVER/1 ${deviceId(this)} $PORT"
                         .toByteArray(Charsets.UTF_8)
                     socket.send(DatagramPacket(response, response.size, request.address, request.port))
                 }
