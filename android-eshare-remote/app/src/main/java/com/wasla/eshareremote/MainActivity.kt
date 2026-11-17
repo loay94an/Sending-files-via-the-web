@@ -1901,7 +1901,7 @@ class MainActivity : Activity() {
         val scaledY = moveDy * framebufferHeight * touchSensitivity / viewHeight.coerceAtLeast(1)
         gyroCursorX = (gyroCursorX + scaledX).coerceIn(0f, framebufferWidth)
         gyroCursorY = (gyroCursorY + scaledY).coerceIn(0f, framebufferHeight)
-        if (waslaTvSocket == null) sendGyroPosition(gyroCursorX, gyroCursorY)
+        sendGyroPosition(gyroCursorX, gyroCursorY)
     }
 
     private fun sendPointerClick() {
@@ -1925,7 +1925,6 @@ class MainActivity : Activity() {
     }
 
     private fun sendGyroPosition(x: Float, y: Float) {
-        if (waslaTvSocket != null) return
         synchronized(gyroPositionLock) {
             pendingGyroPosition = x to y
             if (gyroPositionWriteQueued) return
@@ -1944,7 +1943,15 @@ class MainActivity : Activity() {
                     if (next == null) gyroPositionWriteQueued = false
                     next
                 } ?: break
-                writePointerPacket("GYROSCOPEEVENT\r\n${position.first}\r\n${position.second}\r\n2\r\n\r\n")
+                if (waslaTvSocket != null) {
+                    val nx = (position.first / framebufferWidth.coerceAtLeast(1f) * 10000f).toInt().coerceIn(0, 10000)
+                    val ny = (position.second / framebufferHeight.coerceAtLeast(1f) * 10000f).toInt().coerceIn(0, 10000)
+                    if (!sendWaslaAction("MOVE $nx $ny")) {
+                        throw IllegalStateException("تعذر إرسال حركة المؤشر عبر وصلة")
+                    }
+                } else {
+                    writePointerPacket("GYROSCOPEEVENT\r\n${position.first}\r\n${position.second}\r\n2\r\n\r\n")
+                }
             }
         } catch (e: Exception) {
             synchronized(gyroPositionLock) {
@@ -2058,7 +2065,7 @@ class MainActivity : Activity() {
 
     private fun showWaslaReceiverChoices(devices: List<WaslaReceiverCandidate>) {
         val labels = devices.mapIndexed { index, device ->
-            "${index + 1}. وصلة TV\\n${device.ip}  •  ${device.latencyMs} ms"
+            "${index + 1}. وصلة TV\n${device.ip}  •  ${device.latencyMs} ms"
         }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("اختر مستقبل وصلة")
@@ -2130,7 +2137,7 @@ class MainActivity : Activity() {
                 socket.soTimeout = 5000
                 val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)
                 val writer = socket.getOutputStream().bufferedWriter(Charsets.UTF_8)
-                writer.write("PAIR $code\\n")
+                writer.write("PAIR $code\n")
                 writer.flush()
                 val greeting = reader.readLine()
                 if (greeting?.startsWith("OK WASLA-TV/1") != true) {
@@ -2139,7 +2146,7 @@ class MainActivity : Activity() {
                 }
                 // Bind the scanned QR identity to the endpoint so a stale/forged
                 // QR cannot silently pair with a different receiver on the same IP.
-                writer.write("INFO\\n")
+                writer.write("INFO\n")
                 writer.flush()
                 val info = reader.readLine().orEmpty().split(' ')
                 if (info.size < 3 || info[0] != "WASLA-TV/1" ||
@@ -2155,8 +2162,9 @@ class MainActivity : Activity() {
                 val now = android.os.SystemClock.elapsedRealtime()
                 lastWaslaPongAt = now
                 lastWaslaPingAt = now
+                val pairedDeviceId = expectedDeviceId?.takeIf { it.isNotBlank() } ?: info[1]
                 prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code)
-                    .putString("wasla_tv_id", expectedDeviceId ?: "").apply()
+                    .putString("wasla_tv_id", pairedDeviceId).apply()
                 runOnUiThread { connectionIpLabel?.text = "⌁  $ip" }
                 setStatus("متصل بمستقبل وصلة على التلفاز — اتصال محلي")
                 connectWaslaRelay()
@@ -2198,8 +2206,9 @@ class MainActivity : Activity() {
             if (socket == null || socket.isClosed || !socket.isConnected) {
                 val ip = prefs.getString("wasla_tv_ip", "") ?: ""
                 val code = prefs.getString("wasla_tv_code", "") ?: ""
+                val deviceId = prefs.getString("wasla_tv_id", "") ?: ""
                 if (ip.isNotBlank() && code.matches(Regex("\\d{6}")) && !waslaConnecting.get()) {
-                    connectWaslaReceiver(ip, code)
+                    connectWaslaReceiver(ip, code, deviceId)
                 }
                 return@scheduleWithFixedDelay
             }
@@ -2215,7 +2224,7 @@ class MainActivity : Activity() {
                         val active = waslaTvSocket ?: return@scheduleWithFixedDelay
                         val out = waslaTvOutput ?: return@scheduleWithFixedDelay
                         if (active.isClosed) throw IllegalStateException("socket closed")
-                        out.write("PING\\n".toByteArray(Charsets.UTF_8))
+                        out.write("PING\n".toByteArray(Charsets.UTF_8))
                         out.flush()
                         lastWaslaPingAt = now
                     }
@@ -2347,6 +2356,12 @@ class MainActivity : Activity() {
             .put("id", relayMessageId.incrementAndGet().toString())
             .put("command", command).toString()
         return try { relay.send(payload) } catch (_: Exception) { false }
+    }
+
+    private fun sendWaslaMove(x: Float, y: Float): Boolean {
+        val nx = (x / framebufferWidth.coerceAtLeast(1f) * 10000f).toInt().coerceIn(0, 10000)
+        val ny = (y / framebufferHeight.coerceAtLeast(1f) * 10000f).toInt().coerceIn(0, 10000)
+        return sendWaslaAction("MOVE $nx $ny")
     }
 
     private fun sendWaslaTap(x: Float, y: Float): Boolean {
