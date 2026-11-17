@@ -222,7 +222,7 @@ class MainActivity : Activity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
                 if (!suppressTextWatcher) {
-                    sendComposingText(0, s?.toString().orEmpty())
+                    sendComposingText(previousTextLength, s?.toString().orEmpty())
                 }
             }
         })
@@ -610,41 +610,25 @@ class MainActivity : Activity() {
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 703) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                beginSpeechRecognition()
-            } else {
-                setStatus("يجب السماح باستخدام الميكروفون لتشغيل التحكم الصوتي")
-            }
-        }
-    }
-
+    // Match the known EShare remote flow: launch Android's speech UI directly.
+    // The recognizer app owns microphone permission; Wasla does not capture audio itself.
     private fun startVoiceRecognition() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 703)
-            return
-        }
-        beginSpeechRecognition()
-    }
-
-    // Use Android's installed speech-recognition activity. It owns microphone
-    // startup and service selection, and is more compatible across Android devices
-    // than creating a recognizer service directly inside this activity.
-    private fun beginSpeechRecognition() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-JO")
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-JO")
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "تحدث الآن للتحكم بالتلفاز")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "تحدث الآن للتحكم بالتلفاز أو لإدخال نص")
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         }
         try {
-            setStatus("🎙 جارٍ فتح الميكروفون…")
+            if (intent.resolveActivity(packageManager) == null) {
+                setStatus("لا توجد خدمة تعرف صوتي مثبتة؛ فعّل الكتابة الصوتية من Google")
+                return
+            }
+            setStatus("🎙 استمع الآن…")
             startActivityForResult(intent, 701)
         } catch (e: Exception) {
-            setStatus("لا توجد خدمة إدخال صوتي متاحة: ${e.message ?: "تحقق من تطبيق Google"}")
+            setStatus("تعذر تشغيل التعرف الصوتي: ${e.message ?: "تحقق من خدمة Google"}")
         }
     }
 
