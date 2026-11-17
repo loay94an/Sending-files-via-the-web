@@ -310,7 +310,7 @@ class WaslaLocalServerService : Service() {
                                     val uri = Uri.parse(String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8))
                                     val name = String(Base64.decode(parts[2], Base64.NO_WRAP), Charsets.UTF_8)
                                     val root = selectedFolder()
-                                    val parent = root?.let { findSharedDocument(uri, it) }
+                                    val parent = if (parts[1] == "ROOT") root else root?.let { findSharedDocument(uri, it) }
                                     val valid = name.isNotBlank() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\\\') && name.length <= 120
                                     output.writeUTF(when {
                                         parent == null || !parent.isDirectory || !parent.canWrite() -> "ERROR FOLDER_NOT_WRITABLE"
