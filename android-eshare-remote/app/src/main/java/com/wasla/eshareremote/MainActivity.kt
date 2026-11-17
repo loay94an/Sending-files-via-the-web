@@ -1059,7 +1059,7 @@ class MainActivity : Activity() {
         val socket = Socket()
         socket.tcpNoDelay = true
         socket.connect(InetSocketAddress(ip, 38472), 6000)
-        socket.soTimeout = 30000
+        socket.soTimeout = 120000
         val input = DataInputStream(socket.getInputStream())
         val output = DataOutputStream(socket.getOutputStream())
         output.writeUTF("PAIR $code")
@@ -1085,6 +1085,7 @@ class MainActivity : Activity() {
                 val mime = contentResolver.getType(uri) ?: "application/octet-stream"
                 val name64 = android.util.Base64.encodeToString(name.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
                 val mime64 = android.util.Base64.encodeToString(mime.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                setStatus("جارٍ تجهيز نقل الملف: $name")
                 val (socket, streams) = openFileChannel()
                 socket.use {
                     val (input, output) = streams
@@ -1092,11 +1093,17 @@ class MainActivity : Activity() {
                     contentResolver.openInputStream(uri)?.use { source ->
                         val buffer = ByteArray(32 * 1024)
                         var remaining = size
+                        var reported = -1
                         while (remaining > 0) {
                             val count = source.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
                             if (count < 0) throw java.io.EOFException("انتهى الملف قبل اكتمال الإرسال")
                             output.write(buffer, 0, count)
                             remaining -= count
+                            val percent = (((size - remaining) * 100) / size).toInt()
+                            if (percent >= reported + 5 || remaining == 0L) {
+                                reported = percent
+                                setStatus("إرسال $name إلى التلفاز: $percent%")
+                            }
                         }
                         output.flush()
                     } ?: throw IllegalStateException("تعذر فتح الملف المحدد")
@@ -1246,11 +1253,17 @@ class MainActivity : Activity() {
                     target.use { sink ->
                         val buffer = ByteArray(32 * 1024)
                         var remaining = size
+                        var reported = -1
                         while (remaining > 0) {
                             val count = minOf(buffer.size.toLong(), remaining).toInt()
                             input.readFully(buffer, 0, count)
                             sink.write(buffer, 0, count)
                             remaining -= count
+                            val percent = if (size == 0L) 100 else (((size - remaining) * 100) / size).toInt()
+                            if (percent >= reported + 5 || remaining == 0L) {
+                                reported = percent
+                                setStatus("تنزيل $pendingDownloadName إلى الهاتف: $percent%")
+                            }
                         }
                     }
                 }
