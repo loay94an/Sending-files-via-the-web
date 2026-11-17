@@ -1510,6 +1510,7 @@ class MainActivity : Activity() {
         // cursor coordinates on firmware that processes pointer events late.
         val x = gyroCursorX
         val y = gyroCursorY
+        if (sendWaslaTap(x, y)) return
         airMouseIo.execute {
             try {
                 writePointerPacket("GYROSCOPEEVENT\r\n$x\r\n$y\r\n2\r\n\r\n")
@@ -1822,6 +1823,16 @@ class MainActivity : Activity() {
     }
 
     private fun sendKey(key: Int) {
+        val waslaKey = when (key) {
+            4 -> "BACK"
+            3 -> "HOME"
+            187 -> "RECENTS"
+            24 -> "VOLUME_UP"
+            25 -> "VOLUME_DOWN"
+            164 -> "MUTE"
+            else -> null
+        }
+        if (waslaKey != null && sendWaslaAction("KEY $waslaKey")) return
         io.execute {
             try {
                 writePacketWithReconnect("KEYEVENT\r\n$key\r\n\r\n")
@@ -1829,6 +1840,29 @@ class MainActivity : Activity() {
                 setStatus("تعذر إرسال الأمر: ${e.message ?: "الاتصال غير متاح"}")
             }
         }
+    }
+
+    /** Sends a whitelisted command over the already PIN-paired Wasla session. */
+    private fun sendWaslaAction(command: String): Boolean {
+        synchronized(waslaTvLock) {
+            val socket = waslaTvSocket ?: return false
+            val out = waslaTvOutput ?: return false
+            if (socket.isClosed || !socket.isConnected) return false
+            return try {
+                out.write("ACTION $command\n".toByteArray(Charsets.UTF_8))
+                out.flush()
+                true
+            } catch (_: Exception) {
+                closeWaslaReceiver()
+                false
+            }
+        }
+    }
+
+    private fun sendWaslaTap(x: Float, y: Float): Boolean {
+        val nx = (x / framebufferWidth.coerceAtLeast(1f) * 10000f).coerceIn(0f, 10000f)
+        val ny = (y / framebufferHeight.coerceAtLeast(1f) * 10000f).coerceIn(0f, 10000f)
+        return sendWaslaAction("TAP ${nx.toInt()} ${ny.toInt()}")
     }
 
     private fun sendPointerHold(pressed: Boolean) {
@@ -1858,6 +1892,11 @@ class MainActivity : Activity() {
     private fun sendText(value: String) {
         val text = value.replace("\r", "").replace("\n", " ")
         if (text.isBlank()) return
+        val encoded = android.util.Base64.encodeToString(text.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+        if (sendWaslaAction("TEXT $encoded")) {
+            setStatus("أُرسل النص إلى مستقبل وصلة")
+            return
+        }
         io.execute {
             try {
                 // EShare keyboard expects composing text followed by a commit.
