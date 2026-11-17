@@ -9,7 +9,7 @@
 - `PAIR <6-digit-pin>` — establishes the socket session.
 - `PING` / `PONG`
 - `ACTION KEY <BACK|HOME|RECENTS|VOLUME_UP|VOLUME_DOWN|MUTE|NOTIFICATIONS|QUICK_SETTINGS>`
-- `ACTION TAP <x> <y>` — absolute screen coordinates in physical pixels.
+- `ACTION TAP <x> <y>` — normalized screen coordinates (0–10000) independent of TV resolution.
 - `ACTION SWIPE <x1> <y1> <x2> <y2> <duration-ms>`
 - `ACTION TEXT <base64-utf8>` — inserts text into the currently focused editable field.
 - Responses are `ACTION_OK`, `ACTION_UNAVAILABLE`, or `BAD_ACTION`.
