@@ -236,7 +236,8 @@ class MainActivity : Activity() {
                 android.view.MotionEvent.ACTION_MOVE -> {
                     val totalDx = event.x - downX
                     val totalDy = event.y - downY
-                    val moveThreshold = if (airMouseEnabled) dp(18) else dp(1)
+                    // Ignore tiny finger jitter so a tap remains a click.
+                    val moveThreshold = if (airMouseEnabled) dp(18) else dp(6)
                     if (kotlin.math.abs(totalDx) + kotlin.math.abs(totalDy) > moveThreshold) moved = true
                     val dx = event.x - lastTouchX
                     val dy = event.y - lastTouchY
