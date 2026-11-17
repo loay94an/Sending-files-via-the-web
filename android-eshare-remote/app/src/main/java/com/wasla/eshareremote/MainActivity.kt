@@ -1,18 +1,29 @@
 package com.wasla.eshareremote
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.Manifest
 import android.os.Bundle
+import android.speech.RecognizerIntent
+import android.text.Editable
+import android.text.TextWatcher
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.net.wifi.WifiManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.graphics.Typeface
 import android.view.Gravity
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.widget.*
 import java.io.OutputStream
@@ -21,16 +32,49 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.net.HttpURLConnection
+import java.net.URL
+import org.json.JSONObject
 
 class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
+    private val connectionMonitor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
+    private val networkRecoveryHandler = Handler(Looper.getMainLooper())
+    @Volatile private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var lastDefaultNetwork: Network? = null
+    private val networkRecoveryTask = Runnable {
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val active = manager.activeNetwork
+        val caps = active?.let { manager.getNetworkCapabilities(it) }
+        val hasUsableNetwork = caps?.let {
+            it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        } == true
+        closeConnection()
+        if (hasUsableNetwork && !reconnecting.get()) {
+            setStatus("تغيّرت الشبكة — جارٍ اكتشاف الشاشة وإعادة الاتصال...")
+            discoverAndConnect()
+        } else {
+            setStatus("بانتظار عودة الشبكة — ستتم إعادة المحاولة تلقائياً...")
+        }
+    }
+    private val reconnecting = AtomicBoolean(false)
+    private val connectionLock = Any()
+    private val gestureHandler = Handler(Looper.getMainLooper())
     // Keep pointer traffic off the discovery/key-command executor to avoid input stalls.
     private val airMouseIo = Executors.newSingleThreadExecutor()
+    private val socketReader = Executors.newSingleThreadExecutor()
     private val gyroPositionLock = Any()
     private val socketWriteLock = Any()
+    private val socketReadLock = Any()
     // EShare framebuffer dimensions are queried from GETFBINFO after connecting.
     private var framebufferWidth = 1280f
     private var framebufferHeight = 720f
@@ -43,6 +87,8 @@ class MainActivity : Activity() {
     private var pendingTouchDy = 0f
     private var tcp: Socket? = null
     private var output: OutputStream? = null
+    @Volatile private var localHttpServer: ServerSocket? = null
+    @Volatile private var localHttpThread: Thread? = null
     private var discoveryLock: WifiManager.MulticastLock? = null
     private lateinit var sensorManager: SensorManager
     private var gyroSensor: Sensor? = null
@@ -53,7 +99,18 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
+    private lateinit var textInput: EditText
+    private var suppressTextWatcher = false
     private val prefs by lazy { getSharedPreferences("remote", Context.MODE_PRIVATE) }
+    @Volatile private var waslaTvSocket: Socket? = null
+    @Volatile private var waslaTvOutput: OutputStream? = null
+    private val waslaTvLock = Any()
+    private val waslaLinkExecutor = Executors.newSingleThreadExecutor()
+    private val waslaLinkMonitor = Executors.newSingleThreadScheduledExecutor()
+    private val waslaConnecting = AtomicBoolean(false)
+    private val waslaMonitorStarted = AtomicBoolean(false)
+    @Volatile private var lastWaslaPongAt = 0L
+    @Volatile private var lastWaslaPingAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,7 +128,13 @@ class MainActivity : Activity() {
         buildUi()
         val saved = prefs.getString("ip", "") ?: ""
         ipInput.setText(saved)
+        registerNetworkCallback()
         discoverAndConnect()
+        startConnectionMonitor()
+        val savedWaslaIp = prefs.getString("wasla_tv_ip", "") ?: ""
+        val savedWaslaCode = prefs.getString("wasla_tv_code", "") ?: ""
+        startWaslaLinkMonitor()
+        if (savedWaslaIp.isNotBlank() && savedWaslaCode.isNotBlank()) connectWaslaReceiver(savedWaslaIp, savedWaslaCode)
     }
 
     private fun buildUi() {
@@ -159,7 +222,65 @@ class MainActivity : Activity() {
             setOnClickListener { sendKey(26) }
         }
         header.addView(power, LinearLayout.LayoutParams(dp(72), dp(58)))
+        val settingsButton = makeButton("⚙", 48).apply {
+            textSize = 20f
+            contentDescription = "إعدادات وصلة"
+            setOnClickListener { showSettingsDialog() }
+        }
+        header.addView(settingsButton, LinearLayout.LayoutParams(dp(48), dp(58)).apply {
+            marginStart = dp(4)
+        })
         root.addView(header, lp(-1, dp(72)))
+
+        // Phone keyboard input sits above the sharing and file-transfer shortcuts.
+        val textEntry = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            background = surface(0xff0c192d.toInt(), 17, 0xff263f61.toInt())
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+        }
+        textInput = EditText(this).apply {
+            hint = "اكتب نصاً لإرساله إلى التلفاز"
+            textSize = 14f
+            setSingleLine(true)
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setTextColor(white)
+            setHintTextColor(muted)
+            setPadding(dp(9), 0, dp(9), 0)
+            background = android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT)
+        }
+        textEntry.addView(textInput, LinearLayout.LayoutParams(0, dp(44), 1f))
+        val sendTextButton = makeButton("إرسال", 42, true).apply {
+            textSize = 13f
+            setOnClickListener {
+                val value = textInput.text.toString()
+                if (value.isNotBlank()) {
+                    sendText(value)
+                    suppressTextWatcher = true
+                    textInput.text.clear()
+                    suppressTextWatcher = false
+                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+                    imm.hideSoftInputFromWindow(textInput.windowToken, 0)
+                }
+            }
+        }
+        textEntry.addView(sendTextButton, LinearLayout.LayoutParams(dp(76), dp(42)))
+        // Keep typing local on the phone. Send a complete UTF-8 composing + commit
+        // sequence only when Send is pressed, avoiding stale composing indexes and
+        // asynchronous per-keystroke packets that could arrive out of order.
+        textInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE ||
+                actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
+                sendTextButton.performClick()
+                true
+            } else false
+        }
+        root.addView(textEntry, LinearLayout.LayoutParams(-1, dp(52)).apply {
+            topMargin = dp(7); bottomMargin = dp(3)
+        })
 
         val shortcuts = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -178,31 +299,14 @@ class MainActivity : Activity() {
         shortcuts.addView(filesButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(5) })
         root.addView(shortcuts, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(7); bottomMargin = dp(3) })
 
-        // Keep manual IP connection available without letting it dominate the design.
-        val connection = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        // One connection entry point: automatic discovery or QR pairing.
+        ipInput = EditText(this) // retained internally for discovered-IP compatibility; not shown in the main UI
+        connectButton = makeButton("اتصال", 48, true).apply {
+            textSize = 15f
+            setOnClickListener { showConnectionOptions() }
         }
-        ipInput = EditText(this).apply {
-            hint = "عنوان IP للتلفاز"
-            textSize = 13f
-            setSingleLine(true)
-            inputType = android.text.InputType.TYPE_CLASS_TEXT
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
-            setTextColor(white)
-            setHintTextColor(muted)
-            setPadding(dp(12), 0, dp(12), 0)
-            background = surface(0xff0c192d.toInt(), 14, 0xff263f61.toInt())
-        }
-        connection.addView(ipInput, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(7) })
-        connectButton = makeButton("اتصال", 40, true).apply {
-            textSize = 13f
-            setOnClickListener { discoverAndConnect(ipInput.text.toString().trim().ifEmpty { null }) }
-        }
-        connection.addView(connectButton, LinearLayout.LayoutParams(dp(82), dp(40)))
-        root.addView(connection, LinearLayout.LayoutParams(-1, dp(43)).apply {
-            topMargin = dp(7); bottomMargin = dp(7)
+        root.addView(connectButton, LinearLayout.LayoutParams(-1, dp(48)).apply {
+            topMargin = dp(7); bottomMargin = dp(5)
         })
 
         val touchPad = FrameLayout(this).apply {
@@ -223,12 +327,22 @@ class MainActivity : Activity() {
         var lastTouchX = 0f
         var lastTouchY = 0f
         var moved = false
+        var longPressTriggered = false
+        val longPressStart = Runnable {
+            if (!moved && !longPressTriggered) {
+                longPressTriggered = true
+                sendPointerHold(true)
+            }
+        }
         touchPad.setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
                     downX = event.x; downY = event.y
                     lastTouchX = event.x; lastTouchY = event.y
                     moved = false
+                    longPressTriggered = false
+                    gestureHandler.removeCallbacks(longPressStart)
+                    gestureHandler.postDelayed(longPressStart, 620L)
                     // Do not send synthetic mouse-down/up packets here: on some
                     // EShare builds those reset the relative pointer to screen center.
                     true
@@ -238,7 +352,10 @@ class MainActivity : Activity() {
                     val totalDy = event.y - downY
                     // Ignore tiny finger jitter so a tap remains a click.
                     val moveThreshold = if (airMouseEnabled) dp(18) else dp(6)
-                    if (kotlin.math.abs(totalDx) + kotlin.math.abs(totalDy) > moveThreshold) moved = true
+                    if (kotlin.math.abs(totalDx) + kotlin.math.abs(totalDy) > moveThreshold) {
+                        moved = true
+                        gestureHandler.removeCallbacks(longPressStart)
+                    }
                     val dx = event.x - lastTouchX
                     val dy = event.y - lastTouchY
                     lastTouchX = event.x
@@ -249,6 +366,12 @@ class MainActivity : Activity() {
                     true
                 }
                 android.view.MotionEvent.ACTION_UP -> {
+                    gestureHandler.removeCallbacks(longPressStart)
+                    if (longPressTriggered) {
+                        sendPointerHold(false)
+                        view.performClick()
+                        return@setOnTouchListener true
+                    }
                     if (!airMouseEnabled) sendTouchMouseEvent(0f, 0f, 1, view.width, view.height)
                     val totalDx = event.x - downX
                     val totalDy = event.y - downY
@@ -271,7 +394,11 @@ class MainActivity : Activity() {
                     view.performClick()
                     true
                 }
-                android.view.MotionEvent.ACTION_CANCEL -> true
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    gestureHandler.removeCallbacks(longPressStart)
+                    if (longPressTriggered) sendPointerHold(false)
+                    true
+                }
                 else -> true
             }
         }
@@ -329,6 +456,16 @@ class MainActivity : Activity() {
                 textSize = dp(15).toFloat()
             }
             private var pressedSector = -1
+            private var okLongPressTriggered = false
+            private val okLongPress = Runnable {
+                if (pressedSector == 4 && !okLongPressTriggered) {
+                    okLongPressTriggered = true
+                    // Android TV context/options key. A normal short press remains DPAD_CENTER.
+                    sendKey(82)
+                    setStatus("تم طلب قائمة الخيارات")
+                    invalidate()
+                }
+            }
             private val keys = intArrayOf(19, 22, 20, 21)
             private val symbols = arrayOf("▲", "▶", "▼", "◀")
 
@@ -383,26 +520,40 @@ class MainActivity : Activity() {
                 }
                 when (event.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> {
+                        gestureHandler.removeCallbacks(okLongPress)
                         pressedSector = hitSector()
+                        okLongPressTriggered = false
+                        if (pressedSector == 4) gestureHandler.postDelayed(okLongPress, 600L)
                         invalidate()
                         return pressedSector >= 0
                     }
                     android.view.MotionEvent.ACTION_MOVE -> {
                         val next = hitSector()
-                        if (next != pressedSector) { pressedSector = next; invalidate() }
+                        if (next != pressedSector) {
+                            gestureHandler.removeCallbacks(okLongPress)
+                            pressedSector = next
+                            invalidate()
+                        }
                         return true
                     }
                     android.view.MotionEvent.ACTION_UP -> {
+                        gestureHandler.removeCallbacks(okLongPress)
                         val selected = hitSector()
                         val pressed = pressedSector
+                        val wasLongPress = okLongPressTriggered
                         pressedSector = -1
+                        okLongPressTriggered = false
                         invalidate()
-                        if (selected >= 0 && selected == pressed) sendKey(if (selected == 4) 23 else keys[selected])
+                        if (!wasLongPress && selected >= 0 && selected == pressed) {
+                            sendKey(if (selected == 4) 23 else keys[selected])
+                        }
                         performClick()
                         return true
                     }
                     android.view.MotionEvent.ACTION_CANCEL -> {
+                        gestureHandler.removeCallbacks(okLongPress)
                         pressedSector = -1
+                        okLongPressTriggered = false
                         invalidate()
                         return true
                     }
@@ -415,7 +566,7 @@ class MainActivity : Activity() {
                 return true
             }
         }.apply {
-            contentDescription = "أزرار الاتجاهات حول زر OK"
+            contentDescription = "أزرار الاتجاهات حول زر OK؛ اضغط مطولاً على OK لفتح الخيارات"
             isClickable = true
             elevation = dp(7).toFloat()
         }
@@ -444,24 +595,29 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
-        val voice = makeButton("🎙  التحكم الصوتي", 58).apply {
-            textSize = 14f
-            setOnClickListener {
-                try {
-                    val intent = Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                        putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                            android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                        putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "ar")
-                        putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "قل أمراً للتحكم بالتلفاز")
-                    }
-                    startActivityForResult(intent, 701)
-                } catch (_: Exception) {
-                    setStatus("ميزة التعرف الصوتي غير متاحة على هذا الهاتف")
+        val appShortcuts = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
+        for (slot in 1..3) {
+            val savedLabel = prefs.getString("tv_app_shortcut_${slot}_label", null)
+            val shortcutButton = makeButton(savedLabel ?: "＋", 44).apply {
+                textSize = 10f
+                maxLines = 1
+                setPadding(dp(2), dp(2), dp(2), dp(2))
+                contentDescription = savedLabel ?: "اضغط مطولاً لاختيار تطبيق من التلفاز"
+                setOnClickListener { launchTvAppShortcut(slot) }
+                setOnLongClickListener {
+                    chooseTvAppShortcut(slot, this)
+                    true
                 }
             }
+            appShortcuts.addView(shortcutButton, LinearLayout.LayoutParams(dp(48), dp(44)).apply {
+                if (slot > 1) setMargins(dp(3), 0, 0, 0)
+            })
         }
-        bottom.addView(voice, LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginEnd = dp(5) })
-        val airToggle = makeButton("⌁  الماوس الهوائي", 58, true).apply {
+        val airToggle = makeButton("⌁ الهوائي", 44, true).apply {
             textSize = 14f
             isEnabled = gyroSensor != null
             if (gyroSensor == null) text = "مستشعر الحركة غير متاح"
@@ -482,44 +638,327 @@ class MainActivity : Activity() {
                 setStatus(if (airMouseEnabled) "الماوس الهوائي مفعّل — اللوحة للتنقل والاختيار" else "التحكم بلوحة اللمس")
             }
         }
-        bottom.addView(airToggle, LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginStart = dp(5) })
-        // Put the main navigation keys at the bottom, as requested, with voice/air-mouse below them.
+        bottom.addView(appShortcuts, LinearLayout.LayoutParams(dp(150), dp(48)).apply { marginEnd = dp(5) })
+        bottom.addView(airToggle, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginStart = dp(5) })
+        // Three small TV-app shortcuts share one horizontal line with the air-mouse toggle.
         root.addView(deck, LinearLayout.LayoutParams(-1, dp(174)).apply { topMargin = dp(3) })
-        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(5); bottomMargin = dp(5) })
+        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(50)).apply { topMargin = dp(3); bottomMargin = dp(5) })
 
         setContentView(root)
     }
 
+    private fun showSettingsDialog() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(4))
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
+        val airLabel = TextView(this).apply { textSize = 15f; setTextColor(0xff15243a.toInt()) }
+        val airSeek = SeekBar(this).apply {
+            max = 2000
+            progress = ((prefs.getFloat("air_mouse_sensitivity", 1498f) - 500f).toInt()).coerceIn(0, 2000)
+        }
+        airLabel.text = "حساسية الماوس الهوائي: ${500 + airSeek.progress}"
+        airSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                airLabel.text = "حساسية الماوس الهوائي: ${500 + progress}"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
+        val touchLabel = TextView(this).apply { textSize = 15f; setTextColor(0xff15243a.toInt()) }
+        val touchSeek = SeekBar(this).apply {
+            max = 20
+            progress = ((prefs.getFloat("touchpad_sensitivity", 1.0f) - 0.5f) * 10f).toInt().coerceIn(0, 20)
+        }
+        touchLabel.text = "حساسية لوحة اللمس: " + String.format(java.util.Locale.US, "%.1f", 0.5f + touchSeek.progress / 10f) + "×"
+        touchSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                touchLabel.text = "حساسية لوحة اللمس: " + String.format(java.util.Locale.US, "%.1f", 0.5f + progress / 10f) + "×"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
+        content.addView(airLabel)
+        content.addView(airSeek, LinearLayout.LayoutParams(-1, dp(44)))
+        content.addView(touchLabel)
+        content.addView(touchSeek, LinearLayout.LayoutParams(-1, dp(44)))
+        AlertDialog.Builder(this)
+            .setTitle("إعدادات وصلة")
+            .setView(content)
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("حفظ") { _, _ ->
+                prefs.edit()
+                    .putFloat("air_mouse_sensitivity", (500 + airSeek.progress).toFloat())
+                    .putFloat("touchpad_sensitivity", 0.5f + touchSeek.progress / 10f)
+                    .apply()
+                setStatus("تم حفظ إعدادات حساسية المؤشر")
+            }
+            .setNeutralButton("تحديث التطبيق") { _, _ -> checkForUpdates() }
+            .show()
+    }
+
+    private fun checkForUpdates() {
+        setStatus("جارٍ التحقق من تحديث وصلة...")
+        Thread({
+            var latestVersion = ""
+            var downloadUrl = "https://github.com/loay94an/wasla/releases/latest"
+            var errorMessage: String? = null
+            try {
+                val connection = (URL("https://api.github.com/repos/loay94an/wasla/releases/latest").openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 7000
+                    readTimeout = 7000
+                    requestMethod = "GET"
+                    setRequestProperty("Accept", "application/vnd.github+json")
+                    setRequestProperty("User-Agent", "Wasla-Android")
+                }
+                try {
+                    if (connection.responseCode == 200) {
+                        val release = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                        latestVersion = release.optString("tag_name", "").removePrefix("v")
+                        val assets = release.optJSONArray("assets")
+                        if (assets != null) {
+                            for (i in 0 until assets.length()) {
+                                val asset = assets.optJSONObject(i) ?: continue
+                                if (asset.optString("name").startsWith("wasla-eshare-remote") &&
+                                    asset.optString("name").endsWith(".apk")) {
+                                    downloadUrl = asset.optString("browser_download_url", downloadUrl)
+                                    break
+                                }
+                            }
+                        }
+                    } else {
+                        errorMessage = "لا توجد نسخة منشورة بعد أو تعذر الوصول إلى صفحة الإصدارات."
+                    }
+                } finally { connection.disconnect() }
+            } catch (_: Exception) {
+                errorMessage = "تعذر الاتصال بخدمة التحديث. تحقق من الإنترنت وحاول مجدداً."
+            }
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                val current = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty().removePrefix("v")
+                val hasNew = latestVersion.isNotBlank() && latestVersion != current
+                val message = when {
+                    errorMessage != null -> errorMessage!!
+                    hasNew -> "تتوفر نسخة أحدث: $latestVersion\nالإصدار المثبت: $current"
+                    else -> "أنت تستخدم أحدث إصدار منشور ($current)."
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("تحديث وصلة")
+                    .setMessage(message)
+                    .setPositiveButton(if (hasNew) "تنزيل التحديث" else "فتح صفحة الإصدارات") { _, _ ->
+                        try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(downloadUrl))) }
+                        catch (_: Exception) { setStatus("تعذر فتح رابط التحديث") }
+                    }
+                    .setNegativeButton("إغلاق", null)
+                    .show()
+            }
+        }, "wasla-update-check").start()
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 702 && resultCode == RESULT_OK) {
-            val uri = data?.data ?: return
-            val share = Intent(Intent.ACTION_SEND).apply {
-                type = contentResolver.getType(uri) ?: "*/*"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                clipData = android.content.ClipData.newUri(contentResolver, "ملف للتلفاز", uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        when (requestCode) {
+            8110 -> {
+                if (resultCode == RESULT_OK) {
+                    val contents = data?.getStringExtra(QrScannerActivity.EXTRA_RESULT)
+                    if (!contents.isNullOrBlank()) handleWaslaQr(contents)
+                    else setStatus("لم يتم العثور على بيانات داخل رمز QR")
+                } else {
+                    setStatus("تم إلغاء مسح رمز QR أو لم يُمنح إذن الكاميرا")
+                }
             }
-            startActivity(Intent.createChooser(share, "إرسال الملف إلى تطبيق على التلفاز"))
-            setStatus("اختر تطبيق استقبال الملفات على التلفاز إن كان مثبتاً")
+            702 -> {
+                if (resultCode == RESULT_OK) {
+                    val uri = data?.data ?: return
+                    val share = Intent(Intent.ACTION_SEND).apply {
+                        type = contentResolver.getType(uri) ?: "*/*"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        clipData = android.content.ClipData.newUri(contentResolver, "ملف للتلفاز", uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    startActivity(Intent.createChooser(share, "إرسال الملف إلى تطبيق على التلفاز"))
+                    setStatus("اختر تطبيق استقبال الملفات على التلفاز إن كان مثبتاً")
+                }
+            }
+            701 -> {
+                if (resultCode != RESULT_OK) {
+                    setStatus("تم إلغاء الاستماع أو لم يصل رد من خدمة الصوت")
+                    return
+                }
+                val spoken = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                    ?.firstOrNull()?.trim()
+                if (spoken.isNullOrBlank()) {
+                    setStatus("لم يتم التعرف على الكلام؛ حاول مجدداً")
+                } else {
+                    setStatus("تم التعرف: $spoken")
+                    processSpokenText(spoken)
+                }
+            }
+        }
+    }
+
+    // Match the known EShare remote flow: launch Android's speech UI directly.
+    // The recognizer app owns microphone permission; Wasla does not capture audio itself.
+    private fun startVoiceRecognition() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-JO")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-JO")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "تحدث الآن للتحكم بالتلفاز أو لإدخال نص")
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+        }
+        try {
+            setStatus("🎙 استمع الآن…")
+            startActivityForResult(intent, 701)
+        } catch (e: Exception) {
+            setStatus("تعذر تشغيل التعرف الصوتي: ${e.message ?: "تحقق من خدمة Google"}")
+        }
+    }
+
+    private fun processSpokenText(raw: String) {
+        val spoken = raw.trim()
+        val command = spoken.lowercase(java.util.Locale("ar"))
+        when {
+            command.contains("الرئيسية") || command.contains("هوم") -> sendKey(3)
+            command.contains("رجوع") || command.contains("عودة") -> sendKey(4)
+            command.contains("يمين") -> sendKey(22)
+            command.contains("يسار") -> sendKey(21)
+            command.contains("فوق") || command.contains("أعلى") -> sendKey(19)
+            command.contains("تحت") || command.contains("أسفل") -> sendKey(20)
+            command.contains("موافق") || command.contains("اختيار") -> sendKey(23)
+            command.contains("ارفع الصوت") || command.contains("الصوت أعلى") -> sendKey(24)
+            command.contains("اخفض الصوت") || command.contains("الصوت أقل") -> sendKey(25)
+            command.contains("كتم") -> sendKey(164)
+            command.contains("طاقة") || command.contains("إيقاف") -> sendKey(26)
+            command.contains("افتح المساعد الصوتي") || command.contains("شغل المساعد الصوتي") -> sendKey(231)
+            command.startsWith("ابحث في يوتيوب عن ") || command.startsWith("ابحث عن ") -> {
+                val query = spoken.substringAfter("عن ").trim()
+                if (query.isNotBlank()) {
+                    sendKey(84)
+                    gestureHandler.postDelayed({ sendText(query) }, 900L)
+                }
+            }
+            else -> {
+                sendText(spoken)
+            }
+        }
+    }
+
+    private data class TvApp(val name: String, val packageName: String)
+
+    // EShare's original remote uses GETAPPINFOSEVNET and a little-endian
+    // length-prefixed binary list; STARTAPPEVNET launches the selected TV package.
+    private fun readTvAppList(): List<TvApp> {
+        val socket = tcp ?: throw IllegalStateException("التلفاز غير متصل")
+        synchronized(socketReadLock) {
+            socket.soTimeout = 5000
+            try {
+                synchronized(socketWriteLock) {
+                    val stream = output ?: throw IllegalStateException("جلسة التحكم غير جاهزة")
+                    stream.write("GETAPPINFOSEVNET\r\n1\r\n\r\n".toByteArray(Charsets.UTF_8))
+                    stream.flush()
+                }
+                val input = socket.getInputStream()
+                val header = ByteArray(4)
+                var got = 0
+                while (got < 4) {
+                    val count = input.read(header, got, 4 - got)
+                    if (count < 0) throw IllegalStateException("انقطع رد قائمة التطبيقات")
+                    got += count
+                }
+                fun intLe(bytes: ByteArray, offset: Int): Int =
+                    (bytes[offset].toInt() and 0xff) or
+                        ((bytes[offset + 1].toInt() and 0xff) shl 8) or
+                        ((bytes[offset + 2].toInt() and 0xff) shl 16) or
+                        ((bytes[offset + 3].toInt() and 0xff) shl 24)
+                val total = intLe(header, 0)
+                if (total !in 4..8_000_000) throw IllegalStateException("حجم قائمة التطبيقات غير صالح: $total")
+                val packet = ByteArray(total)
+                System.arraycopy(header, 0, packet, 0, 4)
+                got = 4
+                while (got < total) {
+                    val count = input.read(packet, got, total - got)
+                    if (count < 0) throw IllegalStateException("قائمة التطبيقات وصلت بشكل غير مكتمل")
+                    got += count
+                }
+                val apps = ArrayList<TvApp>()
+                var offset = 4
+                fun readField(): ByteArray {
+                    if (offset + 4 > total) throw IllegalStateException("بيانات التطبيقات غير مكتملة")
+                    val length = intLe(packet, offset)
+                    offset += 4
+                    if (length < 0 || length > total - offset) throw IllegalStateException("حقل تطبيق غير صالح")
+                    val bytes = packet.copyOfRange(offset, offset + length)
+                    offset += length
+                    return bytes
+                }
+                while (offset < total) {
+                    val name = readField().toString(Charsets.UTF_8)
+                    val packageName = readField().toString(Charsets.UTF_8)
+                    readField() // version name
+                    if (offset + 8 > total) throw IllegalStateException("بيانات إصدار التطبيق غير مكتملة")
+                    val versionCodeLength = intLe(packet, offset)
+                    offset += 4
+                    if (versionCodeLength < 0 || versionCodeLength > total - offset) throw IllegalStateException("إصدار تطبيق غير صالح")
+                    offset += versionCodeLength
+                    readField() // icon bytes
+                    if (name.isNotBlank() && packageName.isNotBlank()) apps.add(TvApp(name, packageName))
+                }
+                return apps.distinctBy { it.packageName }.sortedBy { it.name.lowercase(java.util.Locale.getDefault()) }
+            } finally {
+                try { socket.soTimeout = 250 } catch (_: Exception) { }
+            }
+        }
+    }
+
+    private fun chooseTvAppShortcut(slot: Int, button: Button) {
+        setStatus("جارٍ جلب تطبيقات التلفاز...")
+        io.execute {
+            try {
+                val apps = readTvAppList()
+                runOnUiThread {
+                    if (apps.isEmpty()) {
+                        Toast.makeText(this, "لم يُرجع التلفاز قائمة تطبيقات", Toast.LENGTH_LONG).show()
+                        return@runOnUiThread
+                    }
+                    android.app.AlertDialog.Builder(this)
+                        .setTitle("اختر تطبيقاً من التلفاز للاختصار $slot")
+                        .setItems(apps.map { it.name }.toTypedArray()) { _, which ->
+                            val app = apps[which]
+                            prefs.edit()
+                                .putString("tv_app_shortcut_${slot}_pkg", app.packageName)
+                                .putString("tv_app_shortcut_${slot}_label", app.name)
+                                .apply()
+                            button.text = app.name
+                            button.contentDescription = "فتح تطبيق التلفاز ${app.name}"
+                            setStatus("تم تعيين ${app.name} للاختصار $slot")
+                        }
+                        .setNegativeButton("إلغاء", null)
+                        .show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this, "تعذر جلب تطبيقات التلفاز: ${e.message ?: "تحقق من الاتصال"}", Toast.LENGTH_LONG).show()
+                    setStatus("تعذر قراءة تطبيقات التلفاز")
+                }
+            }
+        }
+    }
+
+    private fun launchTvAppShortcut(slot: Int) {
+        val packageName = prefs.getString("tv_app_shortcut_${slot}_pkg", null)
+        if (packageName.isNullOrBlank()) {
+            Toast.makeText(this, "اضغط مطولاً لاختيار تطبيق من التلفاز", Toast.LENGTH_SHORT).show()
             return
         }
-        if (requestCode != 701 || resultCode != RESULT_OK) return
-        val spoken = data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
-            ?.firstOrNull()?.trim()?.lowercase(java.util.Locale("ar")) ?: return
-        when {
-            spoken.contains("الرئيسية") || spoken.contains("هوم") -> sendKey(3)
-            spoken.contains("رجوع") || spoken.contains("عودة") -> sendKey(4)
-            spoken.contains("يمين") -> sendKey(22)
-            spoken.contains("يسار") -> sendKey(21)
-            spoken.contains("فوق") || spoken.contains("أعلى") -> sendKey(19)
-            spoken.contains("تحت") || spoken.contains("أسفل") -> sendKey(20)
-            spoken.contains("موافق") || spoken.contains("اختيار") -> sendKey(23)
-            spoken.contains("ارفع الصوت") || spoken.contains("الصوت أعلى") -> sendKey(24)
-            spoken.contains("اخفض الصوت") || spoken.contains("الصوت أقل") -> sendKey(25)
-            spoken.contains("كتم") -> sendKey(164)
-            spoken.contains("طاقة") || spoken.contains("إيقاف") -> sendKey(26)
-            else -> setStatus("لم أفهم الأمر: $spoken")
+        io.execute {
+            try {
+                writePacketWithReconnect("STARTAPPEVNET\r\n$packageName\r\n\r\n")
+                setStatus("تم إرسال أمر فتح التطبيق إلى التلفاز")
+            } catch (e: Exception) {
+                setStatus("تعذر فتح التطبيق: ${e.message ?: "تحقق من الاتصال"}")
+            }
         }
     }
 
@@ -603,12 +1042,17 @@ class MainActivity : Activity() {
     private fun setStatus(message: String) = runOnUiThread { status.text = message }
 
     private fun discoverAndConnect(manualIp: String? = null) {
+        if (!reconnecting.compareAndSet(false, true)) return
         connectButton.isEnabled = false
         setStatus("جارٍ اكتشاف التلفاز عبر الشبكة...")
         io.execute {
             try {
                 closeConnection()
-                val found = if (manualIp != null) Device("التلفاز", manualIp, discoverPort(manualIp)) else discover()
+                val found = if (manualIp != null) {
+                    val savedIp = prefs.getString("ip", null)
+                    val port = if (manualIp == savedIp) prefs.getInt("port", 8121) else discoverPort(manualIp)
+                    Device("التلفاز", manualIp, port)
+                } else discover()
                 connect(found)
             } catch (e: Exception) {
                 setStatus("تعذر الاتصال: ${e.message ?: "تحقق من Wi-Fi"}")
@@ -616,11 +1060,88 @@ class MainActivity : Activity() {
                 try { discoveryLock?.let { if (it.isHeld) it.release() } } catch (_: Exception) { }
                 discoveryLock = null
                 runOnUiThread { connectButton.isEnabled = true }
+                reconnecting.set(false)
             }
         }
     }
 
     private data class Device(val name: String, val ip: String, val port: Int)
+
+    // Discover UPnP/DIAL receivers even when the EShare application is not open.
+    private fun discoverSsdpScreens(): List<Device> {
+        val candidates = java.util.concurrent.ConcurrentHashMap<String, Device>()
+        val targets = listOf(
+            "urn:schemas-upnp-org:device:MediaRenderer:1",
+            "urn:dial-multiscreen-org:service:dial:1",
+            "ssdp:all"
+        )
+        try {
+            DatagramSocket().use { udp ->
+                udp.soTimeout = 350
+                for (target in targets) {
+                    val request = (
+                        "M-SEARCH * HTTP/1.1\r\n" +
+                        "HOST: 239.255.255.250:1900\r\n" +
+                        "MAN: " + "\"ssdp:discover\"" + "\r\n" +
+                        "MX: 1\r\nST: $target\r\n\r\n"
+                    ).toByteArray(Charsets.US_ASCII)
+                    try {
+                        udp.send(DatagramPacket(request, request.size,
+                            InetAddress.getByName("239.255.255.250"), 1900))
+                    } catch (_: Exception) { }
+                }
+                val deadline = System.currentTimeMillis() + 2600
+                val buffer = ByteArray(4096)
+                while (System.currentTimeMillis() < deadline) {
+                    try {
+                        val packet = DatagramPacket(buffer, buffer.size)
+                        udp.receive(packet)
+                        val response = String(packet.data, 0, packet.length, Charsets.ISO_8859_1)
+                        val st = response.lineSequence().firstOrNull { it.startsWith("ST:", true) }
+                            ?.substringAfter(":")?.trim().orEmpty()
+                        val server = response.lineSequence().firstOrNull { it.startsWith("SERVER:", true) }
+                            ?.substringAfter(":")?.trim().orEmpty()
+                        val usn = response.lineSequence().firstOrNull { it.startsWith("USN:", true) }
+                            ?.substringAfter(":")?.trim().orEmpty()
+                        val renderer = st.contains("MediaRenderer", true) ||
+                            st.contains("dial-multiscreen", true) ||
+                            server.contains("Roku", true) ||
+                            server.contains("Samsung", true) ||
+                            server.contains("Android", true) ||
+                            server.contains("LG", true)
+                        if (!renderer) continue
+                        val ip = packet.address.hostAddress ?: continue
+                        val name = when {
+                            server.contains("Roku", true) -> "Roku TV"
+                            server.contains("Samsung", true) -> "Samsung TV"
+                            server.contains("LG", true) -> "LG TV"
+                            server.contains("Android", true) -> "Android TV"
+                            st.contains("dial-multiscreen", true) -> "مستقبل بث"
+                            else -> "شاشة على الشبكة"
+                        }
+                        candidates["$ip:$usn"] = Device(name, ip, 8121)
+                    } catch (_: java.net.SocketTimeoutException) { }
+                }
+            }
+        } catch (_: Exception) { }
+        return candidates.values.distinctBy { it.ip }.sortedBy { it.name }
+    }
+
+    private fun showScreensWithoutEShare(devices: List<Device>) {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        runOnUiThread {
+            val details = devices.joinToString("\n\n") {
+                "• ${it.name}\n${it.ip}\nموجودة على الشبكة — خدمة EShare غير ظاهرة"
+            }
+            android.app.AlertDialog.Builder(this)
+                .setTitle("تم اكتشاف شاشة على الشبكة")
+                .setMessage(details + "\n\nتم التعرف على وجود الشاشة دون تشغيل EShare، لكن التحكم بها يحتاج خدمة تحكم متوافقة.")
+                .setPositiveButton("حسناً") { _, _ -> latch.countDown() }
+                .setOnCancelListener { latch.countDown() }
+                .show()
+        }
+        latch.await(30, TimeUnit.SECONDS)
+    }
 
     private fun packet(): ByteArray {
         val name = "FindECloudBox".toByteArray(Charsets.UTF_8)
@@ -640,28 +1161,20 @@ class MainActivity : Activity() {
             }
         } catch (_: Exception) { }
 
-        val saved = prefs.getString("ip", null)
-        if (!saved.isNullOrBlank() && isControlPortOpen(saved, 8121)) {
-            return Device("التلفاز المحفوظ", saved, 8121)
-        }
-
         data class Subnet(val local: InetAddress, val broadcast: InetAddress, val prefix: Int)
         val subnets = mutableListOf<Subnet>()
         if (dhcp.ipAddress != 0 && dhcp.netmask != 0) {
             try {
                 val local = InetAddress.getByAddress(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(dhcp.ipAddress).array())
                 val mask = dhcp.netmask
-                val prefix = Integer.bitCount(mask)
-                val b = (dhcp.ipAddress and mask) or mask.inv()
-                val broadcast = InetAddress.getByAddress(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(b).array())
-                subnets.add(Subnet(local, broadcast, prefix))
+                val broadcastValue = (dhcp.ipAddress and mask) or mask.inv()
+                val broadcast = InetAddress.getByAddress(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(broadcastValue).array())
+                subnets.add(Subnet(local, broadcast, Integer.bitCount(mask)))
             } catch (_: Exception) { }
         }
-
-        // Android hotspot interfaces are often absent from WifiManager.dhcpInfo.
+        // Include Wi-Fi, hotspot, Ethernet and other active IPv4 interfaces.
         try {
             val interfaces = java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces())
-                .sortedByDescending { it.name.contains("wlan", true) || it.name.contains("ap", true) || it.name.contains("wifi", true) }
             for (networkInterface in interfaces) {
                 if (!networkInterface.isUp || networkInterface.isLoopback) continue
                 for (entry in networkInterface.interfaceAddresses) {
@@ -675,78 +1188,102 @@ class MainActivity : Activity() {
             }
         } catch (_: Exception) { }
 
-        // Broadcast discovery through every active IPv4 interface, including phone hotspot.
+        // Keep every discovered screen instead of returning the first UDP reply.
+        val devices = java.util.concurrent.ConcurrentHashMap<String, Device>()
+        fun addDevice(device: Device) {
+            if (device.ip.isNotBlank() && device.port in 1..65535) {
+                devices["${device.ip}:${device.port}"] = device
+            }
+        }
+
         try {
             val bytes = packet()
-            val udp = DatagramSocket(null)
-            udp.reuseAddress = true
-            udp.bind(InetSocketAddress(48689))
-            udp.broadcast = true
-            udp.soTimeout = 500
-            try {
+            DatagramSocket(null).use { udp ->
+                udp.reuseAddress = true
+                udp.bind(InetSocketAddress(48689))
+                udp.broadcast = true
+                udp.soTimeout = 350
                 val targets = (subnets.map { it.broadcast } + InetAddress.getByName("255.255.255.255"))
                     .distinctBy { it.hostAddress }
                 for (target in targets) {
                     try { udp.send(DatagramPacket(bytes, bytes.size, target, 48689)) } catch (_: Exception) { }
                 }
+                val deadline = System.currentTimeMillis() + 2800
                 val buffer = ByteArray(2048)
-                val deadline = System.currentTimeMillis() + 3500
                 while (System.currentTimeMillis() < deadline) {
                     try {
                         val response = DatagramPacket(buffer, buffer.size)
                         udp.receive(response)
-                        val text = String(response.data, 0, response.length, Charsets.UTF_8)
-                        if (text.startsWith("ECloudBox")) {
-                            val fields = text.split(":")
-                            if (fields.size >= 3) {
-                                val port = fields[2].toIntOrNull()
-                                val ip = response.address.hostAddress
-                                if (port != null && !ip.isNullOrBlank()) {
-                                    val device = Device(fields.getOrElse(1) { "EShare" }, ip, port)
-                                    prefs.edit().putString("ip", ip).apply()
-                                    runOnUiThread { ipInput.setText(ip) }
-                                    return device
-                                }
-                            }
+                        val payload = String(response.data, 0, response.length, Charsets.UTF_8)
+                        if (payload.startsWith("ECloudBox")) {
+                            val fields = payload.split(":")
+                            val port = fields.getOrNull(2)?.toIntOrNull() ?: 8121
+                            val ip = response.address.hostAddress ?: continue
+                            addDevice(Device(fields.getOrElse(1) { "شاشة EShare" }, ip, port))
                         }
                     } catch (_: java.net.SocketTimeoutException) { }
                 }
-            } finally {
-                udp.close()
             }
         } catch (_: Exception) { }
 
-        setStatus("لم يرد اكتشاف UDP؛ جارٍ فحص عناوين شبكة الهاتف ونقطة الاتصال...")
-        val found = java.util.concurrent.atomic.AtomicReference<Device?>(null)
-        val pool = Executors.newFixedThreadPool(48)
+        // Fallback for EShare devices that do not answer UDP discovery.
+        // Probe every host in each active local subnet; do not assume a saved IP.
+        setStatus("جارٍ فحص الشبكة لاكتشاف جميع الشاشات...")
+        val pool = Executors.newFixedThreadPool(64)
         val tasks = mutableListOf<java.util.concurrent.Future<*>>()
         for (subnet in subnets) {
-            val prefix = subnet.prefix.coerceIn(1, 30).let { if (it < 23) 24 else it }
+            val prefix = subnet.prefix.coerceIn(1, 30).coerceAtMost(24)
             val local = ByteBuffer.wrap(subnet.local.address).order(ByteOrder.LITTLE_ENDIAN).int
             val mask = -1 shl (32 - prefix)
             val network = local and mask
-            val broadcastIp = network or mask.inv()
-            for (host in (network + 1) until broadcastIp) {
-                if (host == local || found.get() != null) continue
+            val broadcast = network or mask.inv()
+            for (host in (network + 1) until broadcast) {
+                if (host == local) continue
                 val ip = listOf(host and 255, (host ushr 8) and 255, (host ushr 16) and 255, (host ushr 24) and 255).joinToString(".")
                 tasks.add(pool.submit {
-                    if (found.get() == null && isControlPortOpen(ip, 8121)) {
-                        found.compareAndSet(null, Device("تلفاز EShare", ip, 8121))
-                    }
+                    if (isControlPortOpen(ip, 8121)) addDevice(Device("شاشة EShare", ip, 8121))
                 })
             }
         }
-        val deadline = System.currentTimeMillis() + 9000
-        while (System.currentTimeMillis() < deadline && found.get() == null && tasks.any { !it.isDone }) {
-            Thread.sleep(80)
-        }
+        val deadline = System.currentTimeMillis() + 12000
+        while (System.currentTimeMillis() < deadline && tasks.any { !it.isDone }) Thread.sleep(80)
         pool.shutdownNow()
-        found.get()?.let { device ->
-            prefs.edit().putString("ip", device.ip).apply()
-            runOnUiThread { ipInput.setText(device.ip) }
-            return device
+
+        val found = devices.values.sortedWith(compareBy<Device> { it.name }.thenBy { it.ip })
+        if (found.isEmpty()) {
+            val networkScreens = discoverSsdpScreens()
+            if (networkScreens.isNotEmpty()) {
+                showScreensWithoutEShare(networkScreens)
+                throw IllegalStateException("تم اكتشاف الشاشة على الشبكة، لكن خدمة التحكم EShare غير متاحة.")
+            }
+            throw IllegalStateException("لم يتم العثور على شاشة. تأكد من اتصال الهاتف والشاشة بالشبكة نفسها وأن اكتشاف الأجهزة المحلية مسموح.")
         }
-        throw IllegalStateException("لم يتم العثور على تلفاز EShare. تأكد أن التلفاز متصل بنقطة اتصال الهاتف، أو أدخل عنوان IP الظاهر للتلفاز يدوياً.")
+        val selected = if (found.size == 1) found.first() else chooseDiscoveredDevice(found)
+        prefs.edit().putString("ip", selected.ip).putInt("port", selected.port).putString("device_name", selected.name).apply()
+        runOnUiThread { ipInput.setText(selected.ip) }
+        return selected
+    }
+
+    private fun chooseDiscoveredDevice(devices: List<Device>): Device {
+        val result = java.util.concurrent.atomic.AtomicReference<Device?>(null)
+        val latch = java.util.concurrent.CountDownLatch(1)
+        runOnUiThread {
+            val labels = devices.mapIndexed { index, device ->
+                "${index + 1}. ${device.name}\n${device.ip}  •  منفذ ${device.port}"
+            }.toTypedArray()
+            android.app.AlertDialog.Builder(this)
+                .setTitle("اختر الشاشة المراد الاتصال بها")
+                .setItems(labels) { _, which ->
+                    if (which in devices.indices) result.set(devices[which])
+                    latch.countDown()
+                }
+                .setOnCancelListener { latch.countDown() }
+                .show()
+        }
+        if (!latch.await(90, TimeUnit.SECONDS)) {
+            throw IllegalStateException("انتهت مهلة اختيار الشاشة")
+        }
+        return result.get() ?: throw IllegalStateException("لم يتم اختيار شاشة")
     }
 
     private fun isControlPortOpen(ip: String, port: Int): Boolean {
@@ -782,36 +1319,111 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun connect(device: Device) {
-        val socket = Socket()
-        socket.connect(InetSocketAddress(device.ip, device.port), 4000)
-        tcp = socket
-        output = socket.getOutputStream()
-        // Match the official EShare client: request the actual framebuffer size
-        // before sending pointer packets. A fixed 1280x720 scale can be rejected
-        // or mapped incorrectly on TVs with another framebuffer resolution.
-        try {
-            socket.soTimeout = 1200
-            output?.write("GETFBINFO\r\n1\r\n\r\n".toByteArray(Charsets.UTF_8))
-            output?.flush()
-            val response = ByteArray(1024)
-            val count = socket.getInputStream().read(response)
-            if (count > 0) {
-                val payload = String(response, 0, count, Charsets.UTF_8)
-                val values = Regex("\\d+").findAll(payload).mapNotNull { it.value.toIntOrNull() }.toList()
-                if (values.size >= 2 && values[0] in 320..16384 && values[1] in 240..16384) {
-                    framebufferWidth = values[0].toFloat()
-                    framebufferHeight = values[1].toFloat()
-                }
+    // EShare requires a small feature/auth handshake before keyboard CONTENT
+    // packets are accepted. Complete request/response reads BEFORE starting the
+    // background socket reader so it cannot steal handshake replies.
+    private fun ensureLocalHttpServer(): Int {
+        localHttpServer?.let { if (!it.isClosed) return it.localPort }
+        val server = try {
+            ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(8888))
             }
         } catch (_: Exception) {
-            // Keep a safe fallback if this EShare firmware does not answer GETFBINFO.
-        } finally {
-            try { socket.soTimeout = 500 } catch (_: Exception) { }
+            ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(0))
+            }
         }
+        localHttpServer = server
+        localHttpThread = Thread({
+            while (!server.isClosed) {
+                try {
+                    server.accept().use { client ->
+                        client.soTimeout = 1200
+                        val input = client.getInputStream()
+                        var matched = 0
+                        var count = 0
+                        while (count++ < 8192 && matched < 4) {
+                            val b = input.read()
+                            if (b < 0) break
+                            matched = when {
+                                matched == 0 && b == 13 -> 1
+                                matched == 1 && b == 10 -> 2
+                                matched == 2 && b == 13 -> 3
+                                matched == 3 && b == 10 -> 4
+                                b == 13 -> 1
+                                else -> 0
+                            }
+                        }
+                        val response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        client.getOutputStream().write(response.toByteArray(Charsets.US_ASCII))
+                        client.getOutputStream().flush()
+                    }
+                } catch (_: Exception) {
+                    if (server.isClosed) break
+                }
+            }
+        }, "wasla-eshare-http").apply { isDaemon = true; start() }
+        return server.localPort
+    }
+
+    private fun handshakeRead(socket: Socket, timeoutMs: Int = 1800): String {
+        socket.soTimeout = timeoutMs
+        return try {
+            val buffer = ByteArray(4096)
+            val count = socket.getInputStream().read(buffer)
+            if (count > 0) String(buffer, 0, count, Charsets.UTF_8) else ""
+        } catch (_: SocketTimeoutException) {
+            ""
+        }
+    }
+
+    private fun handshakeWrite(socket: Socket, packet: String) {
+        val stream = socket.getOutputStream()
+        stream.write(packet.toByteArray(Charsets.UTF_8))
+        stream.flush()
+    }
+
+    private fun connect(device: Device) = synchronized(connectionLock) {
+        closeConnection()
+        val httpPort = ensureLocalHttpServer()
+        val socket = Socket()
+        socket.connect(InetSocketAddress(device.ip, device.port), 4000)
+        socket.tcpNoDelay = true
+        tcp = socket
+        output = socket.getOutputStream()
+        prefs.edit().putString("ip", device.ip).putInt("port", device.port).apply()
         gyroCursorX = framebufferWidth / 2f
         gyroCursorY = framebufferHeight / 2f
-        prefs.edit().putString("ip", device.ip).apply()
+
+        try {
+            handshakeWrite(socket, "getFeatures\r\nBoxlightPro\r\n\r\n")
+            handshakeRead(socket, 1200)
+            handshakeWrite(socket, "auth\r\n${android.os.Environment.getExternalStorageDirectory().absolutePath} $httpPort onelong\r\n\r\n")
+            // EShare replies to each setup command. Consume the auth response before
+            // sending getServerInfo, otherwise the next read may consume the wrong reply
+            // and leave the keyboard/input channel in an unauthenticated state.
+            handshakeRead(socket, 1800)
+            handshakeWrite(socket, "getServerInfo\r\n1\r\n\r\n")
+            handshakeRead(socket, 1800)
+            handshakeWrite(socket, "GETFBINFO\r\n1\r\n\r\n")
+            val fbInfo = handshakeRead(socket, 1800).trim()
+            val dimensions = fbInfo.split(Regex("""\r?\n"""))
+            val width = dimensions.getOrNull(0)?.trim()?.toFloatOrNull()
+            val height = dimensions.getOrNull(1)?.trim()?.toFloatOrNull()
+            if (width != null && height != null && width > 0f && height > 0f) {
+                framebufferWidth = width
+                framebufferHeight = height
+                gyroCursorX = width / 2f
+                gyroCursorY = height / 2f
+            }
+        } catch (_: Exception) {
+            // Keep the remote usable on firmware that omits one optional handshake reply.
+        } finally {
+            try { socket.soTimeout = 0 } catch (_: Exception) { }
+        }
+        startSocketReader(socket)
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
     }
 
@@ -847,8 +1459,9 @@ class MainActivity : Activity() {
             val rateY = if (kotlin.math.abs(event.values[0]) < 0.008f) 0f else event.values[0]
             // Increase cursor travel while retaining time-based integration so
             // sensitivity stays consistent across different sensor sample rates.
-            val targetDx = -rateX * dt * 1498f
-            val targetDy = -rateY * dt * 1498f
+            val sensitivity = prefs.getFloat("air_mouse_sensitivity", 1498f).coerceIn(500f, 2500f)
+            val targetDx = -rateX * dt * sensitivity
+            val targetDy = -rateY * dt * sensitivity
             // Faster response with enough filtering to avoid a jittery pointer.
             smoothedGyroDx += (targetDx - smoothedGyroDx) * 0.65f
             smoothedGyroDy += (targetDy - smoothedGyroDy) * 0.65f
@@ -882,8 +1495,9 @@ class MainActivity : Activity() {
         pendingTouchDx = 0f
         pendingTouchDy = 0f
         if (moveDx == 0f && moveDy == 0f) return
-        val scaledX = moveDx * framebufferWidth * 1.0f / viewWidth.coerceAtLeast(1)
-        val scaledY = moveDy * framebufferHeight * 1.0f / viewHeight.coerceAtLeast(1)
+        val touchSensitivity = prefs.getFloat("touchpad_sensitivity", 1.0f).coerceIn(0.5f, 2.5f)
+        val scaledX = moveDx * framebufferWidth * touchSensitivity / viewWidth.coerceAtLeast(1)
+        val scaledY = moveDy * framebufferHeight * touchSensitivity / viewHeight.coerceAtLeast(1)
         gyroCursorX = (gyroCursorX + scaledX).coerceIn(0f, framebufferWidth)
         gyroCursorY = (gyroCursorY + scaledY).coerceIn(0f, framebufferHeight)
         sendGyroPosition(gyroCursorX, gyroCursorY)
@@ -940,37 +1554,415 @@ class MainActivity : Activity() {
     }
 
     private fun writePointerPacket(packet: String) {
-        if (tcp?.isConnected != true || tcp?.isClosed != false) {
-            val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
-            connect(Device("التلفاز", ip, discoverPort(ip)))
+        writePacketWithReconnect(packet)
+    }
+
+    private fun writePacketWithReconnect(packet: String) {
+        synchronized(connectionLock) {
+            fun writeOnce() {
+                if (tcp?.isConnected != true || tcp?.isClosed != false || tcp?.isOutputShutdown == true) {
+                    val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
+                    val port = prefs.getInt("port", 8121)
+                    connect(Device("التلفاز", ip, port))
+                }
+                synchronized(socketWriteLock) {
+                    val stream = output ?: throw IllegalStateException("جلسة التحكم غير جاهزة")
+                    stream.write(packet.toByteArray(Charsets.UTF_8))
+                    stream.flush()
+                }
+            }
+            try {
+                writeOnce()
+            } catch (first: Exception) {
+                closeConnection()
+                try {
+                    val ip = prefs.getString("ip", null) ?: throw first
+                    val port = prefs.getInt("port", 8121)
+                    connect(Device("التلفاز", ip, port))
+                    writeOnce()
+                    setStatus("أُعيد الاتصال بالتلفاز تلقائياً")
+                } catch (second: Exception) {
+                    closeConnection()
+                    setStatus("انقطع الاتصال — جارٍ إعادة المحاولة: ${second.message ?: "تحقق من الشبكة"}")
+                    throw second
+                }
+            }
         }
-        synchronized(socketWriteLock) {
-            output?.write(packet.toByteArray(Charsets.UTF_8))
-            output?.flush()
+    }
+
+    private fun showConnectionOptions() {
+        AlertDialog.Builder(this)
+            .setTitle("طريقة الاتصال")
+            .setItems(arrayOf("التعرّف التلقائي على الشاشة", "الاتصال بمسح رمز QR")) { _, choice ->
+                when (choice) {
+                    0 -> discoverWaslaThenEShare()
+                    1 -> startWaslaQrScanner()
+                }
+            }
+            .setNegativeButton("إلغاء", null)
+            .show()
+    }
+
+    private data class WaslaReceiverCandidate(val deviceId: String, val ip: String, val port: Int)
+
+    private fun discoverWaslaThenEShare() {
+        if (!reconnecting.compareAndSet(false, true)) return
+        connectButton.isEnabled = false
+        setStatus("جارٍ البحث عن مستقبلات وصلة والشاشات المتوافقة...")
+        io.execute {
+            val found = LinkedHashMap<String, WaslaReceiverCandidate>()
+            try {
+                DatagramSocket().use { socket ->
+                    socket.broadcast = true
+                    socket.soTimeout = 250
+                    val probe = "WASLA_DISCOVER/1".toByteArray(Charsets.UTF_8)
+                    val broadcast = DatagramPacket(probe, probe.size, InetAddress.getByName("255.255.255.255"), 38470)
+                    socket.send(broadcast)
+                    val deadline = android.os.SystemClock.elapsedRealtime() + 2200L
+                    val buffer = ByteArray(512)
+                    while (android.os.SystemClock.elapsedRealtime() < deadline) {
+                        try {
+                            val packet = DatagramPacket(buffer, buffer.size)
+                            socket.receive(packet)
+                            val fields = String(packet.data, packet.offset, packet.length, Charsets.UTF_8).trim().split(' ')
+                            if (fields.size >= 3 && fields[0] == "WASLA-TV-DISCOVER/1") {
+                                val id = fields[1]
+                                // The UDP source address is the actual responding TV interface;
+                                // do not trust an arbitrary first interface address from the TV.
+                                val ip = packet.address.hostAddress.orEmpty()
+                                val port = fields[2].toIntOrNull()
+                                if (id.isNotBlank() && ip.isNotBlank() && port == 38471) {
+                                    found["$id@$ip"] = WaslaReceiverCandidate(id, ip, port)
+                                }
+                            }
+                        } catch (_: SocketTimeoutException) { }
+                    }
+                }
+            } catch (_: Exception) { }
+            runOnUiThread {
+                reconnecting.set(false)
+                connectButton.isEnabled = true
+                if (found.isNotEmpty()) {
+                    showWaslaReceiverChoices(found.values.toList())
+                } else {
+                    setStatus("لم يُعثر على مستقبل وصلة — جارٍ البحث عن شاشات EShare...")
+                    discoverAndConnect()
+                }
+            }
+        }
+    }
+
+    private fun showWaslaReceiverChoices(devices: List<WaslaReceiverCandidate>) {
+        val labels = devices.map { "وصلة TV\\n${it.ip}  •  المنفذ ${it.port}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("اختر مستقبل وصلة")
+            .setItems(labels) { _, which ->
+                if (which in devices.indices) showWaslaPinPrompt(devices[which])
+            }
+            .setNegativeButton("إلغاء", null)
+            .show()
+    }
+
+    private fun showWaslaPinPrompt(device: WaslaReceiverCandidate) {
+        val codeInput = EditText(this).apply {
+            hint = "رمز الاقتران الظاهر على التلفاز"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setSingleLine(true)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("تأكيد الاقتران")
+            .setMessage("تم العثور على مستقبل وصلة على الشبكة. أدخل رمز التأكيد الظاهر على شاشة التلفاز.")
+            .setView(codeInput)
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("اقتران") { _, _ ->
+                connectWaslaReceiver(device.ip, codeInput.text.toString().trim(), device.deviceId)
+            }
+            .show()
+    }
+
+    private fun startWaslaQrScanner() {
+        try {
+            startActivityForResult(Intent(this, QrScannerActivity::class.java), 8110)
+        } catch (e: Exception) {
+            setStatus("تعذر فتح ماسح QR: ${e.message ?: "تحقق من الكاميرا"}")
+        }
+    }
+
+    private fun handleWaslaQr(raw: String) {
+        try {
+            val uri = android.net.Uri.parse(raw)
+            if (uri.scheme != "wasla" || uri.host != "pair") {
+                throw IllegalArgumentException("رمز QR ليس رمز اقتران وصلة")
+            }
+            val ip = uri.getQueryParameter("ip").orEmpty()
+            val code = uri.getQueryParameter("code").orEmpty()
+            val port = uri.getQueryParameter("port")?.toIntOrNull()
+            val deviceId = uri.getQueryParameter("id").orEmpty()
+            if (ip.isBlank() || port != 38471 || !code.matches(Regex("\\d{6}")) || deviceId.isBlank()) {
+                throw IllegalArgumentException("بيانات الاقتران غير مكتملة أو غير صالحة")
+            }
+            setStatus("تمت قراءة رمز الشاشة — جارٍ الاقتران...")
+            connectWaslaReceiver(ip, code, deviceId)
+        } catch (e: Exception) {
+            setStatus("تعذر قراءة رمز وصلة: ${e.message ?: "رمز غير صالح"}")
+        }
+    }
+
+    private fun connectWaslaReceiver(ip: String, code: String, expectedDeviceId: String? = null) {
+        if (ip.isBlank() || !code.matches(Regex("\\d{6}"))) {
+            setStatus("بيانات الاقتران غير صالحة")
+            return
+        }
+        if (!waslaConnecting.compareAndSet(false, true)) return
+        waslaLinkExecutor.execute {
+            closeWaslaReceiver()
+            try {
+                val socket = Socket()
+                socket.tcpNoDelay = true
+                socket.keepAlive = true
+                socket.connect(InetSocketAddress(ip, 38471), 5000)
+                socket.soTimeout = 5000
+                val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)
+                val writer = socket.getOutputStream().bufferedWriter(Charsets.UTF_8)
+                writer.write("PAIR $code\\n")
+                writer.flush()
+                val greeting = reader.readLine()
+                if (greeting?.startsWith("OK WASLA-TV/1") != true) {
+                    socket.close()
+                    throw IllegalStateException("رفض التلفاز رمز الاقتران")
+                }
+                // Bind the scanned QR identity to the endpoint so a stale/forged
+                // QR cannot silently pair with a different receiver on the same IP.
+                writer.write("INFO\\n")
+                writer.flush()
+                val info = reader.readLine().orEmpty().split(' ')
+                if (info.size < 3 || info[0] != "WASLA-TV/1" ||
+                    (!expectedDeviceId.isNullOrBlank() && info[1] != expectedDeviceId)) {
+                    socket.close()
+                    throw IllegalStateException("هوية مستقبل وصلة لا تطابق رمز QR")
+                }
+                socket.soTimeout = 20000
+                synchronized(waslaTvLock) {
+                    waslaTvSocket = socket
+                    waslaTvOutput = socket.getOutputStream()
+                }
+                val now = android.os.SystemClock.elapsedRealtime()
+                lastWaslaPongAt = now
+                lastWaslaPingAt = now
+                prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code).apply()
+                setStatus("متصل بمستقبل وصلة على التلفاز — اتصال محلي")
+                Thread({
+                    try {
+                        while (!socket.isClosed) {
+                            val line = try { reader.readLine() } catch (_: SocketTimeoutException) { continue } ?: break
+                            if (line == "PONG") {
+                                lastWaslaPongAt = android.os.SystemClock.elapsedRealtime()
+                            } else if (line.startsWith("WASLA-TV/1")) {
+                                setStatus("اتصال وصلة نشط: $ip")
+                            }
+                        }
+                    } catch (_: Exception) { }
+                    if (waslaTvSocket === socket) {
+                        closeWaslaReceiver()
+                        setStatus("انقطع اتصال مستقبل وصلة — ستتم إعادة المحاولة تلقائياً")
+                    }
+                }, "wasla-tv-link-reader").apply { isDaemon = true; start() }
+            } catch (e: Exception) {
+                closeWaslaReceiver()
+                setStatus("تعذر الاتصال بمستقبل وصلة: ${e.message ?: "تحقق من الشبكة ورمز الاقتران"}")
+            } finally {
+                waslaConnecting.set(false)
+            }
+        }
+    }
+
+    private fun startWaslaLinkMonitor() {
+        if (!waslaMonitorStarted.compareAndSet(false, true)) return
+        waslaLinkMonitor.scheduleWithFixedDelay({
+            val socket = waslaTvSocket
+            if (socket == null || socket.isClosed || !socket.isConnected) {
+                val ip = prefs.getString("wasla_tv_ip", "") ?: ""
+                val code = prefs.getString("wasla_tv_code", "") ?: ""
+                if (ip.isNotBlank() && code.matches(Regex("\\d{6}")) && !waslaConnecting.get()) {
+                    connectWaslaReceiver(ip, code)
+                }
+                return@scheduleWithFixedDelay
+            }
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastWaslaPongAt > 40000L) {
+                closeWaslaReceiver()
+                setStatus("انتهت مهلة اتصال وصلة — جارٍ إعادة الاتصال...")
+                return@scheduleWithFixedDelay
+            }
+            if (now - lastWaslaPingAt >= 15000L) {
+                try {
+                    synchronized(waslaTvLock) {
+                        val active = waslaTvSocket ?: return@scheduleWithFixedDelay
+                        val out = waslaTvOutput ?: return@scheduleWithFixedDelay
+                        if (active.isClosed) throw IllegalStateException("socket closed")
+                        out.write("PING\\n".toByteArray(Charsets.UTF_8))
+                        out.flush()
+                        lastWaslaPingAt = now
+                    }
+                } catch (_: Exception) {
+                    closeWaslaReceiver()
+                    setStatus("انقطع اتصال مستقبل وصلة — جارٍ إعادة المحاولة...")
+                }
+            }
+        }, 5, 5, TimeUnit.SECONDS)
+    }
+
+    private fun closeWaslaReceiver() {
+        synchronized(waslaTvLock) {
+            try { waslaTvOutput?.close() } catch (_: Exception) { }
+            try { waslaTvSocket?.close() } catch (_: Exception) { }
+            waslaTvOutput = null
+            waslaTvSocket = null
         }
     }
 
     private fun sendKey(key: Int) {
         io.execute {
             try {
-                if (tcp?.isConnected != true || tcp?.isClosed != false) {
-                    val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
-                    connect(Device("التلفاز", ip, discoverPort(ip)))
-                }
-                // Pointer and key packets share one TCP stream. Serialize every write
-                // so a key event can never split an AIRMOUSEEVNET packet.
-                synchronized(socketWriteLock) {
-                    output?.write("KEYEVENT\r\n$key\r\n\r\n".toByteArray(Charsets.UTF_8))
-                    output?.flush()
-                }
+                writePacketWithReconnect("KEYEVENT\r\n$key\r\n\r\n")
             } catch (e: Exception) {
-                closeConnection()
-                setStatus("انقطع الاتصال: ${e.message ?: "أعد البحث"}")
+                setStatus("تعذر إرسال الأمر: ${e.message ?: "الاتصال غير متاح"}")
             }
         }
     }
 
-    private fun closeConnection() {
+    private fun sendPointerHold(pressed: Boolean) {
+        val x = gyroCursorX
+        val y = gyroCursorY
+        val action = if (pressed) 0 else 1
+        airMouseIo.execute {
+            try {
+                writePointerPacket("GYROSCOPEEVENT\r\n$x\r\n$y\r\n$action\r\n\r\n")
+            } catch (_: Exception) { }
+        }
+    }
+
+    // Match EShare's original keyboard protocol: update composing text on every edit
+    // using the previous text length, then commit once when the user presses Send/Done.
+    private fun sendComposingText(previousLength: Int, value: String) {
+        val text = value.replace("\r", "").replace("\n", " ")
+        io.execute {
+            try {
+                writePacketWithReconnect("CONTENT\r\n0\r\n$previousLength $text\r\n\r\n")
+            } catch (e: Exception) {
+                setStatus("تعذر تحديث النص: " + (e.message ?: "تحقق من الاتصال"))
+            }
+        }
+    }
+
+    private fun sendText(value: String) {
+        val text = value.replace("\r", "").replace("\n", " ")
+        if (text.isBlank()) return
+        io.execute {
+            try {
+                // EShare keyboard expects composing text followed by a commit.
+                // Send both packets in order on the same socket write queue.
+                writePacketWithReconnect("CONTENT\r\n0\r\n0 $text\r\n\r\nCONTENT\r\n1\r\n0 $text\r\n\r\n")
+                setStatus("أُرسل النص إلى التلفاز")
+            } catch (e: Exception) {
+                setStatus("تعذر إرسال النص: " + (e.message ?: "تحقق من الاتصال"))
+            }
+        }
+    }
+
+    // Read the TCP stream continuously so a remote FIN/reset is detected even
+    // when no remote-control button is being pressed. EShare sends no required
+    // replies to ordinary key/pointer packets, so unsolicited bytes are drained.
+    private fun startSocketReader(socket: Socket) {
+        socketReader.execute {
+            var disconnected = false
+            try {
+                socket.soTimeout = 4000
+                val input = socket.getInputStream()
+                val buffer = ByteArray(1024)
+                while (!socket.isClosed && !Thread.currentThread().isInterrupted) {
+                    try {
+                        socket.soTimeout = 250
+                        val count = synchronized(socketReadLock) { input.read(buffer) }
+                        if (count < 0) {
+                            disconnected = true
+                            break
+                        }
+                    } catch (_: java.net.SocketTimeoutException) {
+                        // A timeout alone is not a disconnect; the periodic port probe
+                        // checks whether the TV is still reachable on the current network.
+                    }
+                }
+            } catch (_: Exception) {
+                disconnected = !socket.isClosed
+            } finally {
+                if (disconnected && tcp === socket) {
+                    closeConnection()
+                    setStatus("انقطع اتصال التلفاز — جارٍ استعادته تلقائياً...")
+                }
+            }
+        }
+    }
+
+    private fun registerNetworkCallback() {
+        if (networkCallback != null) return
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val previous = lastDefaultNetwork
+                lastDefaultNetwork = network
+                if (previous != null && previous != network) {
+                    scheduleNetworkRecovery("تغيّر اتصال الشبكة")
+                } else if (tcp == null && !reconnecting.get()) {
+                    scheduleNetworkRecovery("عودة اتصال الشبكة")
+                }
+            }
+            override fun onLost(network: Network) {
+                if (lastDefaultNetwork == network) lastDefaultNetwork = null
+                scheduleNetworkRecovery("فُقد اتصال الشبكة")
+            }
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                if (network == lastDefaultNetwork && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && tcp == null && !reconnecting.get()) {
+                    scheduleNetworkRecovery("تغيّرت خصائص الشبكة")
+                }
+            }
+        }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 24) {
+                manager.registerDefaultNetworkCallback(callback)
+            } else {
+                // Local-only Wi-Fi still supports TV discovery without internet.
+                val request = NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .build()
+                manager.registerNetworkCallback(request, callback)
+            }
+            networkCallback = callback
+            lastDefaultNetwork = manager.activeNetwork
+        } catch (e: Exception) {
+            setStatus("تعذرت مراقبة تغيّر الشبكة: " + (e.message ?: "سيستمر البحث التلقائي"))
+        }
+    }
+
+    private fun scheduleNetworkRecovery(reason: String) {
+        networkRecoveryHandler.removeCallbacks(networkRecoveryTask)
+        setStatus(reason + " — جارٍ تجهيز إعادة الاتصال...")
+        networkRecoveryHandler.postDelayed(networkRecoveryTask, 1400L)
+    }
+
+    private fun startConnectionMonitor() {
+        // Do not create extra TCP probe sessions while the real EShare socket is active.
+        // Network callbacks handle route changes; this loop retries discovery when disconnected.
+        connectionMonitor.scheduleWithFixedDelay({
+            val socket = tcp
+            if ((socket == null || socket.isClosed || !socket.isConnected) && !reconnecting.get()) {
+                setStatus("الاتصال غير نشط — جارٍ إعادة اكتشاف الشاشة تلقائياً...")
+                discoverAndConnect()
+            }
+        }, 5, 5, TimeUnit.SECONDS)
+    }
+
+    private fun closeConnection() = synchronized(connectionLock) {
         try { output?.close() } catch (_: Exception) { }
         try { tcp?.close() } catch (_: Exception) { }
         output = null
@@ -978,9 +1970,23 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        gestureHandler.removeCallbacksAndMessages(null)
+        networkRecoveryHandler.removeCallbacksAndMessages(null)
+        try {
+            val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            networkCallback?.let { manager.unregisterNetworkCallback(it) }
+        } catch (_: Exception) { }
+        networkCallback = null
+        connectionMonitor.shutdownNow()
+        closeWaslaReceiver()
+        waslaLinkMonitor.shutdownNow()
+        waslaLinkExecutor.shutdownNow()
         closeConnection()
+        try { localHttpServer?.close() } catch (_: Exception) { }
+        localHttpServer = null
         io.shutdownNow()
         airMouseIo.shutdownNow()
+        socketReader.shutdownNow()
         super.onDestroy()
     }
 }
