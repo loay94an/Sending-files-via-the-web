@@ -16,6 +16,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
 import com.google.zxing.MultiFormatReader
+import com.google.zxing.LuminanceSource
 import com.google.zxing.NotFoundException
 import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.common.HybridBinarizer
@@ -136,7 +137,7 @@ class QrScannerActivity : Activity(), SurfaceHolder.Callback, Camera.PreviewCall
         }
     }
 
-    private fun tryDecode(source: PlanarYUVLuminanceSource): String? {
+    private fun tryDecode(source: LuminanceSource): String? {
         return try {
             reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))).text
         } catch (_: NotFoundException) {
