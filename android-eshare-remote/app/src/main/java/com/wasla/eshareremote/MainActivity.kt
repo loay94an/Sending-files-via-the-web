@@ -31,6 +31,9 @@ class MainActivity : Activity() {
     private val airMouseIo = Executors.newSingleThreadExecutor()
     private val gyroPositionLock = Any()
     private val socketWriteLock = Any()
+    // EShare framebuffer dimensions are queried from GETFBINFO after connecting.
+    private var framebufferWidth = 1280f
+    private var framebufferHeight = 720f
     private var gyroCursorX = 640f
     private var gyroCursorY = 360f
     private var pendingGyroPosition: Pair<Float, Float>? = null
@@ -749,6 +752,30 @@ class MainActivity : Activity() {
         socket.connect(InetSocketAddress(device.ip, device.port), 4000)
         tcp = socket
         output = socket.getOutputStream()
+        // Match the official EShare client: request the actual framebuffer size
+        // before sending pointer packets. A fixed 1280x720 scale can be rejected
+        // or mapped incorrectly on TVs with another framebuffer resolution.
+        try {
+            socket.soTimeout = 1200
+            output?.write("GETFBINFO\\r\\n1\\r\\n\\r\\n".toByteArray(Charsets.UTF_8))
+            output?.flush()
+            val response = ByteArray(1024)
+            val count = socket.getInputStream().read(response)
+            if (count > 0) {
+                val payload = String(response, 0, count, Charsets.UTF_8)
+                val values = Regex("\\d+").findAll(payload).mapNotNull { it.value.toIntOrNull() }.toList()
+                if (values.size >= 2 && values[0] in 320..16384 && values[1] in 240..16384) {
+                    framebufferWidth = values[0].toFloat()
+                    framebufferHeight = values[1].toFloat()
+                }
+            }
+        } catch (_: Exception) {
+            // Keep a safe fallback if this EShare firmware does not answer GETFBINFO.
+        } finally {
+            try { socket.soTimeout = 500 } catch (_: Exception) { }
+        }
+        gyroCursorX = framebufferWidth / 2f
+        gyroCursorY = framebufferHeight / 2f
         prefs.edit().putString("ip", device.ip).apply()
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
     }
@@ -785,14 +812,14 @@ class MainActivity : Activity() {
             val rateY = if (kotlin.math.abs(event.values[0]) < 0.008f) 0f else event.values[0]
             // Increase cursor travel while retaining time-based integration so
             // sensitivity stays consistent across different sensor sample rates.
-            val targetDx = -rateX * dt * 300f
-            val targetDy = -rateY * dt * 300f
+            val targetDx = -rateX * dt * 360f
+            val targetDy = -rateY * dt * 360f
             // Faster response with enough filtering to avoid a jittery pointer.
             smoothedGyroDx += (targetDx - smoothedGyroDx) * 0.65f
             smoothedGyroDy += (targetDy - smoothedGyroDy) * 0.65f
             if (smoothedGyroDx != 0f || smoothedGyroDy != 0f) {
-                gyroCursorX = (gyroCursorX + smoothedGyroDx).coerceIn(0f, 1280f)
-                gyroCursorY = (gyroCursorY + smoothedGyroDy).coerceIn(0f, 720f)
+                gyroCursorX = (gyroCursorX + smoothedGyroDx).coerceIn(0f, framebufferWidth)
+                gyroCursorY = (gyroCursorY + smoothedGyroDy).coerceIn(0f, framebufferHeight)
                 sendGyroPosition(gyroCursorX, gyroCursorY)
             }
         }
@@ -804,8 +831,8 @@ class MainActivity : Activity() {
             if (now - lastTouchMoveAt < 55L) return
             lastTouchMoveAt = now
         }
-        val x = (event.x * 1280f / view.width.coerceAtLeast(1)).coerceIn(0f, 1280f)
-        val y = (event.y * 720f / view.height.coerceAtLeast(1)).coerceIn(0f, 720f)
+        val x = (event.x * framebufferWidth / view.width.coerceAtLeast(1)).coerceIn(0f, framebufferWidth)
+        val y = (event.y * framebufferHeight / view.height.coerceAtLeast(1)).coerceIn(0f, framebufferHeight)
         val packet = "SLIDEEVENT\r\n0\r\n$action\r\n[={$x,$y}]\r\n\r\n"
         airMouseIo.execute {
             try {
