@@ -258,9 +258,13 @@ class MainActivity : Activity() {
                         } else {
                             sendKey(if (totalDy >= 0f) 20 else 19)
                         }
-                    } else if (!moved || airMouseEnabled) {
-                        // A tap is always OK/select in either mode.
+                    } else if (airMouseEnabled) {
+                        // Direction-pad mode keeps its OK/select tap behavior.
                         sendKey(23)
+                    } else if (!moved) {
+                        // Click the current absolute pointer position; do not send
+                        // KEYEVENT OK, which selects focus rather than the cursor target.
+                        sendPointerClick()
                     }
                     view.performClick()
                     true
@@ -841,8 +845,8 @@ class MainActivity : Activity() {
             val rateY = if (kotlin.math.abs(event.values[0]) < 0.008f) 0f else event.values[0]
             // Increase cursor travel while retaining time-based integration so
             // sensitivity stays consistent across different sensor sample rates.
-            val targetDx = -rateX * dt * 749f
-            val targetDy = -rateY * dt * 749f
+            val targetDx = -rateX * dt * 1498f
+            val targetDy = -rateY * dt * 1498f
             // Faster response with enough filtering to avoid a jittery pointer.
             smoothedGyroDx += (targetDx - smoothedGyroDx) * 0.65f
             smoothedGyroDy += (targetDy - smoothedGyroDy) * 0.65f
@@ -881,6 +885,23 @@ class MainActivity : Activity() {
         gyroCursorX = (gyroCursorX + scaledX).coerceIn(0f, framebufferWidth)
         gyroCursorY = (gyroCursorY + scaledY).coerceIn(0f, framebufferHeight)
         sendGyroPosition(gyroCursorX, gyroCursorY)
+    }
+
+    private fun sendPointerClick() {
+        // EShare absolute-pointer protocol uses action -1 for movement,
+        // 0 for mouse-down, and 1 for mouse-up. Keep the click on the same
+        // absolute framebuffer coordinates as the visible pointer.
+        val x = gyroCursorX
+        val y = gyroCursorY
+        airMouseIo.execute {
+            try {
+                writePointerPacket("GYROSCOPEEVENT\\r\\n$x\\r\\n$y\\r\\n0\\r\\n\\r\\n")
+                writePointerPacket("GYROSCOPEEVENT\\r\\n$x\\r\\n$y\\r\\n1\\r\\n\\r\\n")
+            } catch (e: Exception) {
+                closeConnection()
+                setStatus("تعذر النقر: ${e.message ?: "أعد الاتصال"}")
+            }
+        }
     }
 
     private fun sendGyroPosition(x: Float, y: Float) {
