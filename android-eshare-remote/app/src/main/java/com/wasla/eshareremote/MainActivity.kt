@@ -1188,7 +1188,7 @@ class MainActivity : Activity() {
                         val result = socket.use {
                             val (input, output) = streams
                             val encoded = android.util.Base64.encodeToString(name.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
-                            output.writeUTF("MKDIR $encoded"); output.flush()
+                            output.writeUTF("MKDIR ${tvFolderStack.lastOrNull() ?: "ROOT"} $encoded"); output.flush()
                             input.readUTF()
                         }
                         setStatus(if (result == "CREATED") "تم إنشاء المجلد" else "تعذر إنشاء المجلد: $result")
