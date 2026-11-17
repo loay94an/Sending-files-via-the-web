@@ -658,10 +658,10 @@ class MainActivity : Activity() {
             max = 2000
             progress = ((prefs.getFloat("air_mouse_sensitivity", 1498f) - 500f).toInt()).coerceIn(0, 2000)
         }
-        airLabel.text = "حساسية الماوس الهوائي: \${500 + airSeek.progress}"
+        airLabel.text = "حساسية الماوس الهوائي: ${500 + airSeek.progress}"
         airSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                airLabel.text = "حساسية الماوس الهوائي: \${500 + progress}"
+                airLabel.text = "حساسية الماوس الهوائي: ${500 + progress}"
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
             override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
@@ -671,10 +671,10 @@ class MainActivity : Activity() {
             max = 20
             progress = ((prefs.getFloat("touchpad_sensitivity", 1.0f) - 0.5f) * 10f).toInt().coerceIn(0, 20)
         }
-        touchLabel.text = "حساسية لوحة اللمس: \${"%.1f".format(java.util.Locale.US, 0.5f + touchSeek.progress / 10f)}×"
+        touchLabel.text = "حساسية لوحة اللمس: " + String.format(java.util.Locale.US, "%.1f", 0.5f + touchSeek.progress / 10f) + "×"
         touchSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                touchLabel.text = "حساسية لوحة اللمس: \${"%.1f".format(java.util.Locale.US, 0.5f + progress / 10f)}×"
+                touchLabel.text = "حساسية لوحة اللمس: " + String.format(java.util.Locale.US, "%.1f", 0.5f + progress / 10f) + "×"
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
             override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
@@ -736,7 +736,7 @@ class MainActivity : Activity() {
             }
             runOnUiThread {
                 if (isFinishing) return@runOnUiThread
-                val current = BuildConfig.VERSION_NAME.removePrefix("v")
+                val current = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty().removePrefix("v")
                 val hasNew = latestVersion.isNotBlank() && latestVersion != current
                 val message = when {
                     errorMessage != null -> errorMessage!!
