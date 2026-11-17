@@ -200,7 +200,7 @@ class TvReceiverActivity : Activity() {
             }
             runOnUiThread {
                 if (isFinishing) return@runOnUiThread
-                val current = BuildConfig.VERSION_NAME.removePrefix("v")
+                val current = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty().removePrefix("v")
                 val hasNew = latestVersion.isNotBlank() && latestVersion != current
                 val message = when {
                     errorMessage != null -> errorMessage!!
