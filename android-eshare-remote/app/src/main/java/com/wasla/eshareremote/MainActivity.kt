@@ -80,6 +80,9 @@ class MainActivity : Activity() {
     private var framebufferHeight = 720f
     private var gyroCursorX = 640f
     private var gyroCursorY = 360f
+    private var touchStartRemoteX = 640f
+    private var touchStartRemoteY = 360f
+    private var touchStartAt = 0L
     private var pendingGyroPosition: Pair<Float, Float>? = null
     private var gyroPositionWriteQueued = false
     private var lastTouchMoveAt = 0L
@@ -338,6 +341,9 @@ class MainActivity : Activity() {
             when (event.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
                     downX = event.x; downY = event.y
+                    touchStartRemoteX = gyroCursorX
+                    touchStartRemoteY = gyroCursorY
+                    touchStartAt = System.currentTimeMillis()
                     lastTouchX = event.x; lastTouchY = event.y
                     moved = false
                     longPressTriggered = false
@@ -386,6 +392,11 @@ class MainActivity : Activity() {
                         // Air-mouse tap clicks the current gyro pointer position,
                         // matching the corrected normal touchpad click behavior.
                         sendPointerClick()
+                    } else if (moved && waslaTvSocket != null) {
+                        sendWaslaSwipe(
+                            touchStartRemoteX, touchStartRemoteY, gyroCursorX, gyroCursorY,
+                            (System.currentTimeMillis() - touchStartAt).coerceIn(80L, 2000L)
+                        )
                     } else if (!moved) {
                         // Click the current absolute pointer position; do not send
                         // KEYEVENT OK, which selects focus rather than the cursor target.
@@ -1500,7 +1511,7 @@ class MainActivity : Activity() {
         val scaledY = moveDy * framebufferHeight * touchSensitivity / viewHeight.coerceAtLeast(1)
         gyroCursorX = (gyroCursorX + scaledX).coerceIn(0f, framebufferWidth)
         gyroCursorY = (gyroCursorY + scaledY).coerceIn(0f, framebufferHeight)
-        sendGyroPosition(gyroCursorX, gyroCursorY)
+        if (waslaTvSocket == null) sendGyroPosition(gyroCursorX, gyroCursorY)
     }
 
     private fun sendPointerClick() {
@@ -1863,6 +1874,15 @@ class MainActivity : Activity() {
         val nx = (x / framebufferWidth.coerceAtLeast(1f) * 10000f).coerceIn(0f, 10000f)
         val ny = (y / framebufferHeight.coerceAtLeast(1f) * 10000f).coerceIn(0f, 10000f)
         return sendWaslaAction("TAP ${nx.toInt()} ${ny.toInt()}")
+    }
+
+    private fun sendWaslaSwipe(x1: Float, y1: Float, x2: Float, y2: Float, duration: Long): Boolean {
+        fun norm(value: Float, extent: Float) =
+            (value / extent.coerceAtLeast(1f) * 10000f).coerceIn(0f, 10000f).toInt()
+        return sendWaslaAction(
+            "SWIPE ${norm(x1, framebufferWidth)} ${norm(y1, framebufferHeight)} " +
+                "${norm(x2, framebufferWidth)} ${norm(y2, framebufferHeight)} ${duration.coerceIn(80L, 2000L)}"
+        )
     }
 
     private fun sendPointerHold(pressed: Boolean) {
