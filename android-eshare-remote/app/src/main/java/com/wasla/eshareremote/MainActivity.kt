@@ -100,8 +100,8 @@ class MainActivity : Activity() {
     private var lastTouchMoveAt = 0L
     private var pendingTouchDx = 0f
     private var pendingTouchDy = 0f
-    private var tcp: Socket? = null
-    private var output: OutputStream? = null
+    @Volatile private var tcp: Socket? = null
+    @Volatile private var output: OutputStream? = null
     @Volatile private var localHttpServer: ServerSocket? = null
     @Volatile private var localHttpThread: Thread? = null
     private var discoveryLock: WifiManager.MulticastLock? = null
@@ -1780,8 +1780,10 @@ class MainActivity : Activity() {
         // different endpoint through the explicit discovery flow.
         val active = tcp
         val activeIp = (active?.remoteSocketAddress as? InetSocketAddress)?.address?.hostAddress
+        val activePort = (active?.remoteSocketAddress as? InetSocketAddress)?.port
         if (active != null && !active.isClosed && active.isConnected &&
-            !active.isOutputShutdown && activeIp == device.ip) return@synchronized
+            !active.isInputShutdown && !active.isOutputShutdown &&
+            activeIp == device.ip && activePort == device.port) return@synchronized
         closeConnection()
         val httpPort = ensureLocalHttpServer()
         val socket = Socket()
@@ -1826,6 +1828,9 @@ class MainActivity : Activity() {
         } finally {
             try { socket.soTimeout = 0 } catch (_: Exception) { }
         }
+        // A successful handshake is the single point at which this session becomes
+        // authoritative. Cancel any delayed network-recovery work and reset retry state.
+        networkRecoveryHandler.removeCallbacks(networkRecoveryTask)
         lastEshareKeepAliveAt = android.os.SystemClock.elapsedRealtime()
         startSocketReader(socket)
         reconnectAttempts = 0
@@ -2556,6 +2561,13 @@ class MainActivity : Activity() {
      * for an explicit Connect tap; background recovery never changes the TV.
      */
     private fun scheduleAutomaticReconnect(reason: String, immediate: Boolean = false) {
+        // Never enqueue a retry while a working EShare session is already owned.
+        if (hasActiveEshareSession()) {
+            reconnectAttempts = 0
+            nextReconnectAt = 0L
+            networkRecoveryHandler.removeCallbacks(networkRecoveryTask)
+            return
+        }
         val ip = prefs.getString("ip", "") ?: ""
         if (ip.isBlank() || isFinishing) return
         val now = android.os.SystemClock.elapsedRealtime()
@@ -2565,6 +2577,8 @@ class MainActivity : Activity() {
         setStatus("$reason — جارٍ الاتصال بـ $ip:$port")
         io.execute {
             try {
+                // Re-check on the serialized I/O thread: a manual connection may
+                // have succeeded after this retry was queued.
                 val active = tcp
                 if (hasActiveEshareSession() && active != null) {
                     reconnectAttempts = 0
