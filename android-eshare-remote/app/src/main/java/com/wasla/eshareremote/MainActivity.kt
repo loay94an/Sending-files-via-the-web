@@ -623,7 +623,7 @@ class MainActivity : Activity() {
                 if (query.isNotBlank()) {
                     // Open the app's search UI, then enter the recognized Arabic query.
                     sendKey(84) // KEYCODE_SEARCH
-                    gestureHandler.postDelayed({ sendText(query) }, 700L)
+                    gestureHandler.postDelayed({ sendComposingText(0, query); sendText(query) }, 700L)
                 }
             }
             spoken.startsWith("ابحث عن ") -> {
@@ -635,6 +635,7 @@ class MainActivity : Activity() {
             }
             else -> {
                 // Anything that is not a remote-control command is treated as dictated text.
+                sendComposingText(0, spoken)
                 sendText(spoken)
             }
         }
