@@ -11,6 +11,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.net.wifi.WifiManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -39,6 +42,22 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
     private val connectionMonitor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
+    private val networkRecoveryHandler = Handler(Looper.getMainLooper())
+    @Volatile private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var lastDefaultNetwork: Network? = null
+    private val networkRecoveryTask = Runnable {
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val active = manager.activeNetwork
+        val caps = active?.let { manager.getNetworkCapabilities(it) }
+        val hasUsableNetwork = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        closeConnection()
+        if (hasUsableNetwork && !reconnecting.get()) {
+            setStatus("تغيّرت الشبكة — جارٍ اكتشاف الشاشة وإعادة الاتصال...")
+            discoverAndConnect()
+        } else {
+            setStatus("بانتظار عودة الشبكة — ستتم إعادة المحاولة تلقائياً...")
+        }
+    }
     private val reconnecting = AtomicBoolean(false)
     private val connectionLock = Any()
     private val gestureHandler = Handler(Looper.getMainLooper())
@@ -92,6 +111,7 @@ class MainActivity : Activity() {
         buildUi()
         val saved = prefs.getString("ip", "") ?: ""
         ipInput.setText(saved)
+        registerNetworkCallback()
         discoverAndConnect()
         startConnectionMonitor()
     }
@@ -1440,19 +1460,52 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun startConnectionMonitor() {
-        connectionMonitor.scheduleWithFixedDelay({
-            val ip = prefs.getString("ip", null) ?: return@scheduleWithFixedDelay
-            val port = prefs.getInt("port", 8121)
-            val reachable = isControlPortOpen(ip, port)
-            if (!reachable) {
-                if (tcp != null) {
-                    closeConnection()
-                    setStatus("انقطع الاتصال بالتلفاز — جارٍ البحث عنه مجدداً...")
+    private fun registerNetworkCallback() {
+        if (networkCallback != null) return
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val previous = lastDefaultNetwork
+                lastDefaultNetwork = network
+                if (previous != null && previous != network) {
+                    scheduleNetworkRecovery("تغيّر اتصال الشبكة")
+                } else if (tcp == null && !reconnecting.get()) {
+                    scheduleNetworkRecovery("عودة اتصال الشبكة")
                 }
-                if (!reconnecting.get()) discoverAndConnect()
-            } else if (tcp == null || tcp?.isClosed != false) {
-                if (!reconnecting.get()) discoverAndConnect()
+            }
+            override fun onLost(network: Network) {
+                if (lastDefaultNetwork == network) lastDefaultNetwork = null
+                scheduleNetworkRecovery("فُقد اتصال الشبكة")
+            }
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                if (network == lastDefaultNetwork && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && tcp == null && !reconnecting.get()) {
+                    scheduleNetworkRecovery("تغيّرت خصائص الشبكة")
+                }
+            }
+        }
+        try {
+            manager.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+            lastDefaultNetwork = manager.activeNetwork
+        } catch (e: Exception) {
+            setStatus("تعذرت مراقبة تغيّر الشبكة: " + (e.message ?: "سيستمر البحث التلقائي"))
+        }
+    }
+
+    private fun scheduleNetworkRecovery(reason: String) {
+        networkRecoveryHandler.removeCallbacks(networkRecoveryTask)
+        setStatus(reason + " — جارٍ تجهيز إعادة الاتصال...")
+        networkRecoveryHandler.postDelayed(networkRecoveryTask, 1400L)
+    }
+
+    private fun startConnectionMonitor() {
+        // Do not create extra TCP probe sessions while the real EShare socket is active.
+        // Network callbacks handle route changes; this loop retries discovery when disconnected.
+        connectionMonitor.scheduleWithFixedDelay({
+            val socket = tcp
+            if ((socket == null || socket.isClosed || !socket.isConnected) && !reconnecting.get()) {
+                setStatus("الاتصال غير نشط — جارٍ إعادة اكتشاف الشاشة تلقائياً...")
+                discoverAndConnect()
             }
         }, 5, 5, TimeUnit.SECONDS)
     }
@@ -1466,6 +1519,12 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         gestureHandler.removeCallbacksAndMessages(null)
+        networkRecoveryHandler.removeCallbacksAndMessages(null)
+        try {
+            val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            networkCallback?.let { manager.unregisterNetworkCallback(it) }
+        } catch (_: Exception) { }
+        networkCallback = null
         connectionMonitor.shutdownNow()
         closeConnection()
         try { localHttpServer?.close() } catch (_: Exception) { }
