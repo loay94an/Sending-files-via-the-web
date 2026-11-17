@@ -265,7 +265,7 @@ class MainActivity : Activity() {
             textSize = 13f
             setOnClickListener { discoverWaslaThenEShare() }
             setOnLongClickListener {
-                discoverAndConnect(interactive = true)
+                discoverWaslaThenEShare(interactive = true)
                 true
             }
         }
@@ -1985,9 +1985,9 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private data class WaslaReceiverCandidate(val deviceId: String, val ip: String, val port: Int)
+    private data class WaslaReceiverCandidate(val deviceId: String, val ip: String, val port: Int, val latencyMs: Long)
 
-    private fun discoverWaslaThenEShare() {
+    private fun discoverWaslaThenEShare(interactive: Boolean = false) {
         if (!reconnecting.compareAndSet(false, true)) return
         connectButton.isEnabled = false
         setStatus("جارٍ البحث عن مستقبلات وصلة والشاشات المتوافقة...")
@@ -2014,7 +2014,7 @@ class MainActivity : Activity() {
                                 val ip = packet.address.hostAddress.orEmpty()
                                 val port = fields[2].toIntOrNull()
                                 if (id.isNotBlank() && ip.isNotBlank() && port == 38471) {
-                                    found["$id@$ip"] = WaslaReceiverCandidate(id, ip, port)
+                                    found["$id@$ip"] = WaslaReceiverCandidate(id, ip, port, measureConnectLatency(Device("وصلة TV", ip, port)))
                                 }
                             }
                         } catch (_: SocketTimeoutException) { }
@@ -2025,17 +2025,19 @@ class MainActivity : Activity() {
                 reconnecting.set(false)
                 connectButton.isEnabled = true
                 if (found.isNotEmpty()) {
-                    showWaslaReceiverChoices(found.values.toList())
+                    showWaslaReceiverChoices(found.values.sortedBy { it.latencyMs })
                 } else {
                     setStatus("لم يُعثر على مستقبل وصلة — جارٍ البحث عن شاشات EShare...")
-                    discoverAndConnect()
+                    discoverAndConnect(interactive = interactive)
                 }
             }
         }
     }
 
     private fun showWaslaReceiverChoices(devices: List<WaslaReceiverCandidate>) {
-        val labels = devices.map { "وصلة TV\\n${it.ip}  •  المنفذ ${it.port}" }.toTypedArray()
+        val labels = devices.mapIndexed { index, device ->
+            "${index + 1}. وصلة TV\\n${device.ip}  •  ${device.latencyMs} ms"
+        }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("اختر مستقبل وصلة")
             .setItems(labels) { _, which ->
