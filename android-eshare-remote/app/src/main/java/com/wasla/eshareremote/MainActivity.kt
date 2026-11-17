@@ -152,6 +152,7 @@ class MainActivity : Activity() {
         val savedWaslaCode = prefs.getString("wasla_tv_code", "") ?: ""
         startWaslaLinkMonitor()
         if (savedWaslaIp.isNotBlank() && savedWaslaCode.isNotBlank()) connectWaslaReceiver(savedWaslaIp, savedWaslaCode)
+        connectWaslaRelay()
     }
 
     private fun buildUi() {
@@ -2111,12 +2112,12 @@ class MainActivity : Activity() {
                 if (relaySocket === webSocket) relaySocket = null
                 relayConnecting.set(false)
                 setStatus("تعذر الاتصال بخادم وصلة عبر الإنترنت — ستتم إعادة المحاولة")
-                gestureHandler.postDelayed({ connectWaslaRelay() }, 8000L)
+                if (!isFinishing) gestureHandler.postDelayed({ connectWaslaRelay() }, 8000L)
             }
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (relaySocket === webSocket) relaySocket = null
                 relayConnecting.set(false)
-                if (prefs.getString("relay_base_url", "").orEmpty().isNotBlank()) {
+                if (!isFinishing && prefs.getString("relay_base_url", "").orEmpty().isNotBlank()) {
                     gestureHandler.postDelayed({ connectWaslaRelay() }, 5000L)
                 }
             }
