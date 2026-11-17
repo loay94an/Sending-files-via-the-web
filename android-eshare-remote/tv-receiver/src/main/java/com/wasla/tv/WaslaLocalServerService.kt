@@ -33,6 +33,28 @@ class WaslaLocalServerService : Service() {
     @Volatile private var fileAcceptThread: Thread? = null
     @Volatile private var acceptThread: Thread? = null
     private val discoveryRunning = AtomicBoolean(false)
+    private data class PairAttempt(var count: Int = 0, var lockedUntil: Long = 0L)
+    private val pairAttempts = mutableMapOf<String, PairAttempt>()
+
+    private fun verifyPair(socket: java.net.Socket, supplied: String): Boolean {
+        val address = socket.inetAddress?.hostAddress ?: "unknown"
+        synchronized(pairAttempts) {
+            val now = System.currentTimeMillis()
+            val state = pairAttempts.getOrPut(address) { PairAttempt() }
+            if (state.lockedUntil > now) return false
+            val valid = constantTimeEquals(supplied, pairCode(this))
+            if (valid) {
+                pairAttempts.remove(address)
+                return true
+            }
+            state.count++
+            if (state.count >= 8) {
+                state.count = 0
+                state.lockedUntil = now + 60_000L
+            }
+            return false
+        }
+    }
     @Volatile private var discoverySocket: DatagramSocket? = null
     @Volatile private var discoveryThread: Thread? = null
     override fun onCreate() {
@@ -97,7 +119,7 @@ class WaslaLocalServerService : Service() {
             val input = DataInputStream(client.getInputStream())
             val output = DataOutputStream(client.getOutputStream())
             val hello = try { input.readUTF() } catch (_: Exception) { return }
-            if (hello != "PAIR ${pairCode(this)}") {
+            if (!hello.startsWith("PAIR ") || !verifyPair(client, hello.removePrefix("PAIR "))) {
                 output.writeUTF("DENIED"); output.flush(); return
             }
             output.writeUTF("OK WASLA-FILES/1"); output.flush()
@@ -137,8 +159,10 @@ class WaslaLocalServerService : Service() {
                                     else if (name.isBlank() || name == "." || name == ".." || name.contains('/') || name.contains('\\') || name.length > 240 ||
                                         size == null || size !in 0L..MAX_FILE_BYTES) output.writeUTF("ERROR INVALID_FILE")
                                     else {
-                                        val created = root.createFile(mime.ifBlank { "application/octet-stream" }, name)
-                                        if (created == null) output.writeUTF("ERROR CREATE_FAILED")
+                                        val created = if (root.findFile(name) == null)
+                                            root.createFile(mime.ifBlank { "application/octet-stream" }, name) else null
+                                        if (root.findFile(name) != null) output.writeUTF("ERROR FILE_EXISTS")
+                                        else if (created == null) output.writeUTF("ERROR CREATE_FAILED")
                                         else {
                                             val target = contentResolver.openOutputStream(created.uri, "w")
                                             if (target == null) {
@@ -166,9 +190,10 @@ class WaslaLocalServerService : Service() {
                                 if (parts.size != 2) output.writeUTF("ERROR BAD_REQUEST")
                                 else {
                                     val uriText = String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
-                                    val doc = DocumentFile.fromSingleUri(this, Uri.parse(uriText))
+                                    val uri = Uri.parse(uriText)
+                                    val doc = selectedFolder()?.listFiles()?.firstOrNull { it.uri == uri }
                                     val size = doc?.length() ?: -1L
-                                    val stream = if (doc?.canRead() == true && size in 0L..MAX_FILE_BYTES) contentResolver.openInputStream(doc.uri) else null
+                                    val stream = if (doc?.canRead() == true && !doc.isDirectory && size in 0L..MAX_FILE_BYTES) contentResolver.openInputStream(doc.uri) else null
                                     if (doc == null || stream == null) output.writeUTF("ERROR NOT_READABLE")
                                     else {
                                         val mime64 = Base64.encodeToString((doc.type ?: "application/octet-stream").toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
@@ -192,8 +217,9 @@ class WaslaLocalServerService : Service() {
                                 if (parts.size != 2) output.writeUTF("ERROR BAD_REQUEST")
                                 else {
                                     val uriText = String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
-                                    val doc = DocumentFile.fromSingleUri(this, Uri.parse(uriText))
-                                    output.writeUTF(if (doc?.canWrite() == true && doc.delete()) "DELETED" else "ERROR DELETE_FAILED")
+                                    val uri = Uri.parse(uriText)
+                                    val doc = selectedFolder()?.listFiles()?.firstOrNull { it.uri == uri }
+                                    output.writeUTF(if (doc?.canWrite() == true && !doc.isDirectory && doc.delete()) "DELETED" else "ERROR DELETE_FAILED")
                                 }
                             }
                             else -> output.writeUTF("ERROR UNKNOWN_COMMAND")
