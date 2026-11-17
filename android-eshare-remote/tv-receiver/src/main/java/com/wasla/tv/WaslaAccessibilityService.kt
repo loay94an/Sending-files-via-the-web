@@ -31,6 +31,14 @@ class WaslaAccessibilityService : AccessibilityService() {
         return dispatchGesture(gesture, null, null)
     }
 
+    fun longPress(x: Float, y: Float, duration: Long): Boolean {
+        val path = Path().apply { moveTo(x, y) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, duration.coerceIn(500, 2000)))
+            .build()
+        return dispatchGesture(gesture, null, null)
+    }
+
     fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, duration: Long): Boolean {
         val path = Path().apply { moveTo(x1, y1); lineTo(x2, y2) }
         val gesture = GestureDescription.Builder()
@@ -69,6 +77,8 @@ class WaslaAccessibilityService : AccessibilityService() {
         fun tap(x: Float, y: Float): Boolean = instance?.tap(x, y) ?: false
         fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, duration: Long): Boolean =
             instance?.swipe(x1, y1, x2, y2, duration) ?: false
+        fun longPress(x: Float, y: Float, duration: Long): Boolean =
+            instance?.longPress(x, y, duration) ?: false
         fun setText(value: String): Boolean = instance?.setFocusedText(value) ?: false
         fun key(name: String): Boolean = instance?.key(name) ?: false
     }
