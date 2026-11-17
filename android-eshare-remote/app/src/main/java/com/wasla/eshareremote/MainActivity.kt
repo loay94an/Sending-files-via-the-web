@@ -1047,7 +1047,7 @@ class MainActivity : Activity() {
             handshakeRead(socket, 1800)
             handshakeWrite(socket, "GETFBINFO\r\n1\r\n\r\n")
             val fbInfo = handshakeRead(socket, 1800).trim()
-            val dimensions = fbInfo.split(Regex("\r?\n"))
+            val dimensions = fbInfo.split(Regex("""\r?\n"""))
             val width = dimensions.getOrNull(0)?.trim()?.toFloatOrNull()
             val height = dimensions.getOrNull(1)?.trim()?.toFloatOrNull()
             if (width != null && height != null && width > 0f && height > 0f) {
