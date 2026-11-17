@@ -16,3 +16,9 @@
 - Socket disconnect monitoring and reconnect retry.
 
 Build status and target-TV behavior must be verified separately. Network discovery requires the phone and receiver to share a reachable local network; guest isolation or VLAN separation can block discovery.
+
+## التحكم الصوتي
+- الأوامر المنطوقة تنفّذ أزرار التحكم الأساسية.
+- الكلام الذي لا يطابق أمراً يُرسل كنص إلى التلفاز.
+- عبارة «ابحث في يوتيوب عن …» تحاول فتح البحث وإرسال عبارة البحث.
+- عبارة «افتح المساعد الصوتي» ترسل مفتاح المساعد الصوتي في Android؛ تفعيل ميكروفون YouTube الداخلي يظل معتمداً على دعم التلفاز والتطبيق.
