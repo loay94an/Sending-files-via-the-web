@@ -120,24 +120,31 @@ class WaslaLocalServerService : Service() {
                 "KEY" -> p.size == 2 && WaslaAccessibilityService.key(p[1])
                 "TAP" -> {
                     if (p.size != 3) false else {
-                        val x = p[1].toFloat()
-                        val y = p[2].toFloat()
+                        val nx = p[1].toFloat()
+                        val ny = p[2].toFloat()
                         val metrics = resources.displayMetrics
-                        if (x < 0f || y < 0f || x >= metrics.widthPixels || y >= metrics.heightPixels) false
-                        else WaslaAccessibilityService.tap(x, y)
+                        if (nx !in 0f..10000f || ny !in 0f..10000f) false
+                        else WaslaAccessibilityService.tap(
+                            nx / 10000f * metrics.widthPixels,
+                            ny / 10000f * metrics.heightPixels
+                        )
                     }
                 }
                 "SWIPE" -> {
                     if (p.size != 6) false else {
-                        val x1 = p[1].toFloat(); val y1 = p[2].toFloat()
-                        val x2 = p[3].toFloat(); val y2 = p[4].toFloat()
+                        val nx1 = p[1].toFloat(); val ny1 = p[2].toFloat()
+                        val nx2 = p[3].toFloat(); val ny2 = p[4].toFloat()
                         val duration = p[5].toLong()
                         val metrics = resources.displayMetrics
-                        val valid = listOf(x1, y1, x2, y2).all { it >= 0f } &&
-                            x1 < metrics.widthPixels && x2 < metrics.widthPixels &&
-                            y1 < metrics.heightPixels && y2 < metrics.heightPixels &&
+                        val valid = listOf(nx1, ny1, nx2, ny2).all { it in 0f..10000f } &&
                             duration in 80L..2000L
-                        valid && WaslaAccessibilityService.swipe(x1, y1, x2, y2, duration)
+                        valid && WaslaAccessibilityService.swipe(
+                            nx1 / 10000f * metrics.widthPixels,
+                            ny1 / 10000f * metrics.heightPixels,
+                            nx2 / 10000f * metrics.widthPixels,
+                            ny2 / 10000f * metrics.heightPixels,
+                            duration
+                        )
                     }
                 }
                 "TEXT" -> {
