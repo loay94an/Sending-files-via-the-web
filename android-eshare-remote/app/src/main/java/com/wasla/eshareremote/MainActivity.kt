@@ -1,6 +1,7 @@
 package com.wasla.eshareremote
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.Manifest
 import android.os.Bundle
 import android.speech.RecognizerIntent
@@ -39,6 +40,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.net.HttpURLConnection
+import java.net.URL
+import org.json.JSONObject
 
 class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
@@ -98,6 +102,15 @@ class MainActivity : Activity() {
     private lateinit var textInput: EditText
     private var suppressTextWatcher = false
     private val prefs by lazy { getSharedPreferences("remote", Context.MODE_PRIVATE) }
+    @Volatile private var waslaTvSocket: Socket? = null
+    @Volatile private var waslaTvOutput: OutputStream? = null
+    private val waslaTvLock = Any()
+    private val waslaLinkExecutor = Executors.newSingleThreadExecutor()
+    private val waslaLinkMonitor = Executors.newSingleThreadScheduledExecutor()
+    private val waslaConnecting = AtomicBoolean(false)
+    private val waslaMonitorStarted = AtomicBoolean(false)
+    @Volatile private var lastWaslaPongAt = 0L
+    @Volatile private var lastWaslaPingAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -118,6 +131,10 @@ class MainActivity : Activity() {
         registerNetworkCallback()
         discoverAndConnect()
         startConnectionMonitor()
+        val savedWaslaIp = prefs.getString("wasla_tv_ip", "") ?: ""
+        val savedWaslaCode = prefs.getString("wasla_tv_code", "") ?: ""
+        startWaslaLinkMonitor()
+        if (savedWaslaIp.isNotBlank() && savedWaslaCode.isNotBlank()) connectWaslaReceiver(savedWaslaIp, savedWaslaCode)
     }
 
     private fun buildUi() {
@@ -205,6 +222,14 @@ class MainActivity : Activity() {
             setOnClickListener { sendKey(26) }
         }
         header.addView(power, LinearLayout.LayoutParams(dp(72), dp(58)))
+        val settingsButton = makeButton("⚙", 48).apply {
+            textSize = 20f
+            contentDescription = "إعدادات وصلة"
+            setOnClickListener { showSettingsDialog() }
+        }
+        header.addView(settingsButton, LinearLayout.LayoutParams(dp(48), dp(58)).apply {
+            marginStart = dp(4)
+        })
         root.addView(header, lp(-1, dp(72)))
 
         // Phone keyboard input sits above the sharing and file-transfer shortcuts.
@@ -274,31 +299,14 @@ class MainActivity : Activity() {
         shortcuts.addView(filesButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(5) })
         root.addView(shortcuts, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(7); bottomMargin = dp(3) })
 
-        // Keep manual IP connection available without letting it dominate the design.
-        val connection = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        // One connection entry point: automatic discovery or QR pairing.
+        ipInput = EditText(this) // retained internally for discovered-IP compatibility; not shown in the main UI
+        connectButton = makeButton("اتصال", 48, true).apply {
+            textSize = 15f
+            setOnClickListener { showConnectionOptions() }
         }
-        ipInput = EditText(this).apply {
-            hint = "عنوان IP للتلفاز"
-            textSize = 13f
-            setSingleLine(true)
-            inputType = android.text.InputType.TYPE_CLASS_TEXT
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
-            setTextColor(white)
-            setHintTextColor(muted)
-            setPadding(dp(12), 0, dp(12), 0)
-            background = surface(0xff0c192d.toInt(), 14, 0xff263f61.toInt())
-        }
-        connection.addView(ipInput, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(7) })
-        connectButton = makeButton("اتصال", 40, true).apply {
-            textSize = 13f
-            setOnClickListener { discoverAndConnect(ipInput.text.toString().trim().ifEmpty { null }) }
-        }
-        connection.addView(connectButton, LinearLayout.LayoutParams(dp(82), dp(40)))
-        root.addView(connection, LinearLayout.LayoutParams(-1, dp(43)).apply {
-            topMargin = dp(7); bottomMargin = dp(7)
+        root.addView(connectButton, LinearLayout.LayoutParams(-1, dp(48)).apply {
+            topMargin = dp(7); bottomMargin = dp(5)
         })
 
         val touchPad = FrameLayout(this).apply {
@@ -639,9 +647,127 @@ class MainActivity : Activity() {
         setContentView(root)
     }
 
+    private fun showSettingsDialog() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(4))
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
+        val airLabel = TextView(this).apply { textSize = 15f; setTextColor(0xff15243a.toInt()) }
+        val airSeek = SeekBar(this).apply {
+            max = 2000
+            progress = ((prefs.getFloat("air_mouse_sensitivity", 1498f) - 500f).toInt()).coerceIn(0, 2000)
+        }
+        airLabel.text = "حساسية الماوس الهوائي: ${500 + airSeek.progress}"
+        airSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                airLabel.text = "حساسية الماوس الهوائي: ${500 + progress}"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
+        val touchLabel = TextView(this).apply { textSize = 15f; setTextColor(0xff15243a.toInt()) }
+        val touchSeek = SeekBar(this).apply {
+            max = 20
+            progress = ((prefs.getFloat("touchpad_sensitivity", 1.0f) - 0.5f) * 10f).toInt().coerceIn(0, 20)
+        }
+        touchLabel.text = "حساسية لوحة اللمس: " + String.format(java.util.Locale.US, "%.1f", 0.5f + touchSeek.progress / 10f) + "×"
+        touchSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                touchLabel.text = "حساسية لوحة اللمس: " + String.format(java.util.Locale.US, "%.1f", 0.5f + progress / 10f) + "×"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
+        content.addView(airLabel)
+        content.addView(airSeek, LinearLayout.LayoutParams(-1, dp(44)))
+        content.addView(touchLabel)
+        content.addView(touchSeek, LinearLayout.LayoutParams(-1, dp(44)))
+        AlertDialog.Builder(this)
+            .setTitle("إعدادات وصلة")
+            .setView(content)
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("حفظ") { _, _ ->
+                prefs.edit()
+                    .putFloat("air_mouse_sensitivity", (500 + airSeek.progress).toFloat())
+                    .putFloat("touchpad_sensitivity", 0.5f + touchSeek.progress / 10f)
+                    .apply()
+                setStatus("تم حفظ إعدادات حساسية المؤشر")
+            }
+            .setNeutralButton("تحديث التطبيق") { _, _ -> checkForUpdates() }
+            .show()
+    }
+
+    private fun checkForUpdates() {
+        setStatus("جارٍ التحقق من تحديث وصلة...")
+        Thread({
+            var latestVersion = ""
+            var downloadUrl = "https://github.com/loay94an/wasla/releases/latest"
+            var errorMessage: String? = null
+            try {
+                val connection = (URL("https://api.github.com/repos/loay94an/wasla/releases/latest").openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 7000
+                    readTimeout = 7000
+                    requestMethod = "GET"
+                    setRequestProperty("Accept", "application/vnd.github+json")
+                    setRequestProperty("User-Agent", "Wasla-Android")
+                }
+                try {
+                    if (connection.responseCode == 200) {
+                        val release = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                        latestVersion = release.optString("tag_name", "").removePrefix("v")
+                        val assets = release.optJSONArray("assets")
+                        if (assets != null) {
+                            for (i in 0 until assets.length()) {
+                                val asset = assets.optJSONObject(i) ?: continue
+                                if (asset.optString("name").startsWith("wasla-eshare-remote") &&
+                                    asset.optString("name").endsWith(".apk")) {
+                                    downloadUrl = asset.optString("browser_download_url", downloadUrl)
+                                    break
+                                }
+                            }
+                        }
+                    } else {
+                        errorMessage = "لا توجد نسخة منشورة بعد أو تعذر الوصول إلى صفحة الإصدارات."
+                    }
+                } finally { connection.disconnect() }
+            } catch (_: Exception) {
+                errorMessage = "تعذر الاتصال بخدمة التحديث. تحقق من الإنترنت وحاول مجدداً."
+            }
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                val current = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty().removePrefix("v")
+                val hasNew = latestVersion.isNotBlank() && latestVersion != current
+                val message = when {
+                    errorMessage != null -> errorMessage!!
+                    hasNew -> "تتوفر نسخة أحدث: $latestVersion\nالإصدار المثبت: $current"
+                    else -> "أنت تستخدم أحدث إصدار منشور ($current)."
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("تحديث وصلة")
+                    .setMessage(message)
+                    .setPositiveButton(if (hasNew) "تنزيل التحديث" else "فتح صفحة الإصدارات") { _, _ ->
+                        try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(downloadUrl))) }
+                        catch (_: Exception) { setStatus("تعذر فتح رابط التحديث") }
+                    }
+                    .setNegativeButton("إغلاق", null)
+                    .show()
+            }
+        }, "wasla-update-check").start()
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
+            8110 -> {
+                if (resultCode == RESULT_OK) {
+                    val contents = data?.getStringExtra(QrScannerActivity.EXTRA_RESULT)
+                    if (!contents.isNullOrBlank()) handleWaslaQr(contents)
+                    else setStatus("لم يتم العثور على بيانات داخل رمز QR")
+                } else {
+                    setStatus("تم إلغاء مسح رمز QR أو لم يُمنح إذن الكاميرا")
+                }
+            }
             702 -> {
                 if (resultCode == RESULT_OK) {
                     val uri = data?.data ?: return
@@ -1333,8 +1459,9 @@ class MainActivity : Activity() {
             val rateY = if (kotlin.math.abs(event.values[0]) < 0.008f) 0f else event.values[0]
             // Increase cursor travel while retaining time-based integration so
             // sensitivity stays consistent across different sensor sample rates.
-            val targetDx = -rateX * dt * 1498f
-            val targetDy = -rateY * dt * 1498f
+            val sensitivity = prefs.getFloat("air_mouse_sensitivity", 1498f).coerceIn(500f, 2500f)
+            val targetDx = -rateX * dt * sensitivity
+            val targetDy = -rateY * dt * sensitivity
             // Faster response with enough filtering to avoid a jittery pointer.
             smoothedGyroDx += (targetDx - smoothedGyroDx) * 0.65f
             smoothedGyroDy += (targetDy - smoothedGyroDy) * 0.65f
@@ -1368,8 +1495,9 @@ class MainActivity : Activity() {
         pendingTouchDx = 0f
         pendingTouchDy = 0f
         if (moveDx == 0f && moveDy == 0f) return
-        val scaledX = moveDx * framebufferWidth * 1.0f / viewWidth.coerceAtLeast(1)
-        val scaledY = moveDy * framebufferHeight * 1.0f / viewHeight.coerceAtLeast(1)
+        val touchSensitivity = prefs.getFloat("touchpad_sensitivity", 1.0f).coerceIn(0.5f, 2.5f)
+        val scaledX = moveDx * framebufferWidth * touchSensitivity / viewWidth.coerceAtLeast(1)
+        val scaledY = moveDy * framebufferHeight * touchSensitivity / viewHeight.coerceAtLeast(1)
         gyroCursorX = (gyroCursorX + scaledX).coerceIn(0f, framebufferWidth)
         gyroCursorY = (gyroCursorY + scaledY).coerceIn(0f, framebufferHeight)
         sendGyroPosition(gyroCursorX, gyroCursorY)
@@ -1459,6 +1587,237 @@ class MainActivity : Activity() {
                     throw second
                 }
             }
+        }
+    }
+
+    private fun showConnectionOptions() {
+        AlertDialog.Builder(this)
+            .setTitle("طريقة الاتصال")
+            .setItems(arrayOf("التعرّف التلقائي على الشاشة", "الاتصال بمسح رمز QR")) { _, choice ->
+                when (choice) {
+                    0 -> discoverWaslaThenEShare()
+                    1 -> startWaslaQrScanner()
+                }
+            }
+            .setNegativeButton("إلغاء", null)
+            .show()
+    }
+
+    private data class WaslaReceiverCandidate(val deviceId: String, val ip: String, val port: Int)
+
+    private fun discoverWaslaThenEShare() {
+        if (!reconnecting.compareAndSet(false, true)) return
+        connectButton.isEnabled = false
+        setStatus("جارٍ البحث عن مستقبلات وصلة والشاشات المتوافقة...")
+        io.execute {
+            val found = LinkedHashMap<String, WaslaReceiverCandidate>()
+            try {
+                DatagramSocket().use { socket ->
+                    socket.broadcast = true
+                    socket.soTimeout = 250
+                    val probe = "WASLA_DISCOVER/1".toByteArray(Charsets.UTF_8)
+                    val broadcast = DatagramPacket(probe, probe.size, InetAddress.getByName("255.255.255.255"), 38470)
+                    socket.send(broadcast)
+                    val deadline = android.os.SystemClock.elapsedRealtime() + 2200L
+                    val buffer = ByteArray(512)
+                    while (android.os.SystemClock.elapsedRealtime() < deadline) {
+                        try {
+                            val packet = DatagramPacket(buffer, buffer.size)
+                            socket.receive(packet)
+                            val fields = String(packet.data, packet.offset, packet.length, Charsets.UTF_8).trim().split(' ')
+                            if (fields.size >= 3 && fields[0] == "WASLA-TV-DISCOVER/1") {
+                                val id = fields[1]
+                                // The UDP source address is the actual responding TV interface;
+                                // do not trust an arbitrary first interface address from the TV.
+                                val ip = packet.address.hostAddress.orEmpty()
+                                val port = fields[2].toIntOrNull()
+                                if (id.isNotBlank() && ip.isNotBlank() && port == 38471) {
+                                    found["$id@$ip"] = WaslaReceiverCandidate(id, ip, port)
+                                }
+                            }
+                        } catch (_: SocketTimeoutException) { }
+                    }
+                }
+            } catch (_: Exception) { }
+            runOnUiThread {
+                reconnecting.set(false)
+                connectButton.isEnabled = true
+                if (found.isNotEmpty()) {
+                    showWaslaReceiverChoices(found.values.toList())
+                } else {
+                    setStatus("لم يُعثر على مستقبل وصلة — جارٍ البحث عن شاشات EShare...")
+                    discoverAndConnect()
+                }
+            }
+        }
+    }
+
+    private fun showWaslaReceiverChoices(devices: List<WaslaReceiverCandidate>) {
+        val labels = devices.map { "وصلة TV\\n${it.ip}  •  المنفذ ${it.port}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("اختر مستقبل وصلة")
+            .setItems(labels) { _, which ->
+                if (which in devices.indices) showWaslaPinPrompt(devices[which])
+            }
+            .setNegativeButton("إلغاء", null)
+            .show()
+    }
+
+    private fun showWaslaPinPrompt(device: WaslaReceiverCandidate) {
+        val codeInput = EditText(this).apply {
+            hint = "رمز الاقتران الظاهر على التلفاز"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setSingleLine(true)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("تأكيد الاقتران")
+            .setMessage("تم العثور على مستقبل وصلة على الشبكة. أدخل رمز التأكيد الظاهر على شاشة التلفاز.")
+            .setView(codeInput)
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("اقتران") { _, _ ->
+                connectWaslaReceiver(device.ip, codeInput.text.toString().trim(), device.deviceId)
+            }
+            .show()
+    }
+
+    private fun startWaslaQrScanner() {
+        try {
+            startActivityForResult(Intent(this, QrScannerActivity::class.java), 8110)
+        } catch (e: Exception) {
+            setStatus("تعذر فتح ماسح QR: ${e.message ?: "تحقق من الكاميرا"}")
+        }
+    }
+
+    private fun handleWaslaQr(raw: String) {
+        try {
+            val uri = android.net.Uri.parse(raw)
+            if (uri.scheme != "wasla" || uri.host != "pair") {
+                throw IllegalArgumentException("رمز QR ليس رمز اقتران وصلة")
+            }
+            val ip = uri.getQueryParameter("ip").orEmpty()
+            val code = uri.getQueryParameter("code").orEmpty()
+            val port = uri.getQueryParameter("port")?.toIntOrNull()
+            val deviceId = uri.getQueryParameter("id").orEmpty()
+            if (ip.isBlank() || port != 38471 || !code.matches(Regex("\\d{6}")) || deviceId.isBlank()) {
+                throw IllegalArgumentException("بيانات الاقتران غير مكتملة أو غير صالحة")
+            }
+            setStatus("تمت قراءة رمز الشاشة — جارٍ الاقتران...")
+            connectWaslaReceiver(ip, code, deviceId)
+        } catch (e: Exception) {
+            setStatus("تعذر قراءة رمز وصلة: ${e.message ?: "رمز غير صالح"}")
+        }
+    }
+
+    private fun connectWaslaReceiver(ip: String, code: String, expectedDeviceId: String? = null) {
+        if (ip.isBlank() || !code.matches(Regex("\\d{6}"))) {
+            setStatus("بيانات الاقتران غير صالحة")
+            return
+        }
+        if (!waslaConnecting.compareAndSet(false, true)) return
+        waslaLinkExecutor.execute {
+            closeWaslaReceiver()
+            try {
+                val socket = Socket()
+                socket.tcpNoDelay = true
+                socket.keepAlive = true
+                socket.connect(InetSocketAddress(ip, 38471), 5000)
+                socket.soTimeout = 5000
+                val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)
+                val writer = socket.getOutputStream().bufferedWriter(Charsets.UTF_8)
+                writer.write("PAIR $code\\n")
+                writer.flush()
+                val greeting = reader.readLine()
+                if (greeting?.startsWith("OK WASLA-TV/1") != true) {
+                    socket.close()
+                    throw IllegalStateException("رفض التلفاز رمز الاقتران")
+                }
+                // Bind the scanned QR identity to the endpoint so a stale/forged
+                // QR cannot silently pair with a different receiver on the same IP.
+                writer.write("INFO\\n")
+                writer.flush()
+                val info = reader.readLine().orEmpty().split(' ')
+                if (info.size < 3 || info[0] != "WASLA-TV/1" ||
+                    (!expectedDeviceId.isNullOrBlank() && info[1] != expectedDeviceId)) {
+                    socket.close()
+                    throw IllegalStateException("هوية مستقبل وصلة لا تطابق رمز QR")
+                }
+                socket.soTimeout = 20000
+                synchronized(waslaTvLock) {
+                    waslaTvSocket = socket
+                    waslaTvOutput = socket.getOutputStream()
+                }
+                val now = android.os.SystemClock.elapsedRealtime()
+                lastWaslaPongAt = now
+                lastWaslaPingAt = now
+                prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code).apply()
+                setStatus("متصل بمستقبل وصلة على التلفاز — اتصال محلي")
+                Thread({
+                    try {
+                        while (!socket.isClosed) {
+                            val line = try { reader.readLine() } catch (_: SocketTimeoutException) { continue } ?: break
+                            if (line == "PONG") {
+                                lastWaslaPongAt = android.os.SystemClock.elapsedRealtime()
+                            } else if (line.startsWith("WASLA-TV/1")) {
+                                setStatus("اتصال وصلة نشط: $ip")
+                            }
+                        }
+                    } catch (_: Exception) { }
+                    if (waslaTvSocket === socket) {
+                        closeWaslaReceiver()
+                        setStatus("انقطع اتصال مستقبل وصلة — ستتم إعادة المحاولة تلقائياً")
+                    }
+                }, "wasla-tv-link-reader").apply { isDaemon = true; start() }
+            } catch (e: Exception) {
+                closeWaslaReceiver()
+                setStatus("تعذر الاتصال بمستقبل وصلة: ${e.message ?: "تحقق من الشبكة ورمز الاقتران"}")
+            } finally {
+                waslaConnecting.set(false)
+            }
+        }
+    }
+
+    private fun startWaslaLinkMonitor() {
+        if (!waslaMonitorStarted.compareAndSet(false, true)) return
+        waslaLinkMonitor.scheduleWithFixedDelay({
+            val socket = waslaTvSocket
+            if (socket == null || socket.isClosed || !socket.isConnected) {
+                val ip = prefs.getString("wasla_tv_ip", "") ?: ""
+                val code = prefs.getString("wasla_tv_code", "") ?: ""
+                if (ip.isNotBlank() && code.matches(Regex("\\d{6}")) && !waslaConnecting.get()) {
+                    connectWaslaReceiver(ip, code)
+                }
+                return@scheduleWithFixedDelay
+            }
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastWaslaPongAt > 40000L) {
+                closeWaslaReceiver()
+                setStatus("انتهت مهلة اتصال وصلة — جارٍ إعادة الاتصال...")
+                return@scheduleWithFixedDelay
+            }
+            if (now - lastWaslaPingAt >= 15000L) {
+                try {
+                    synchronized(waslaTvLock) {
+                        val active = waslaTvSocket ?: return@scheduleWithFixedDelay
+                        val out = waslaTvOutput ?: return@scheduleWithFixedDelay
+                        if (active.isClosed) throw IllegalStateException("socket closed")
+                        out.write("PING\\n".toByteArray(Charsets.UTF_8))
+                        out.flush()
+                        lastWaslaPingAt = now
+                    }
+                } catch (_: Exception) {
+                    closeWaslaReceiver()
+                    setStatus("انقطع اتصال مستقبل وصلة — جارٍ إعادة المحاولة...")
+                }
+            }
+        }, 5, 5, TimeUnit.SECONDS)
+    }
+
+    private fun closeWaslaReceiver() {
+        synchronized(waslaTvLock) {
+            try { waslaTvOutput?.close() } catch (_: Exception) { }
+            try { waslaTvSocket?.close() } catch (_: Exception) { }
+            waslaTvOutput = null
+            waslaTvSocket = null
         }
     }
 
@@ -1619,6 +1978,9 @@ class MainActivity : Activity() {
         } catch (_: Exception) { }
         networkCallback = null
         connectionMonitor.shutdownNow()
+        closeWaslaReceiver()
+        waslaLinkMonitor.shutdownNow()
+        waslaLinkExecutor.shutdownNow()
         closeConnection()
         try { localHttpServer?.close() } catch (_: Exception) { }
         localHttpServer = null

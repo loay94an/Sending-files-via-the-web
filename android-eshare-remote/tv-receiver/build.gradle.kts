@@ -1,0 +1,24 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+android {
+    namespace = "com.wasla.tv"
+    compileSdk = 35
+    defaultConfig {
+        applicationId = "com.wasla.tv"
+        minSdk = 21
+        targetSdk = 28
+        versionCode = 2
+        versionName = "0.1.2"
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+}
+
+dependencies {
+    implementation("com.google.zxing:core:3.5.3")
+}

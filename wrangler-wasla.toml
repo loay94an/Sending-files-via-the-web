@@ -1,0 +1,11 @@
+name = "wasla-connect"
+main = "worker/wasla-connect.js"
+compatibility_date = "2026-11-17"
+
+[[durable_objects.bindings]]
+name = "WASLA_RELAY"
+class_name = "WaslaRelay"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WaslaRelay"]
