@@ -9,8 +9,8 @@ android {
         applicationId = "com.wasla.tv"
         minSdk = 21
         targetSdk = 28
-        versionCode = 3
-        versionName = "0.1.3"
+        versionCode = 4
+        versionName = "0.1.4"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
