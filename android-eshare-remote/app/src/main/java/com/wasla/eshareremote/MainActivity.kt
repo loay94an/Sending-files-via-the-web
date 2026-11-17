@@ -281,7 +281,7 @@ class MainActivity : Activity() {
         var moved = false
         var longPressTriggered = false
         val longPressStart = Runnable {
-            if (!moved && !longPressTriggered && !airMouseEnabled) {
+            if (!moved && !longPressTriggered) {
                 longPressTriggered = true
                 sendPointerHold(true)
             }
@@ -294,7 +294,7 @@ class MainActivity : Activity() {
                     moved = false
                     longPressTriggered = false
                     gestureHandler.removeCallbacks(longPressStart)
-                    if (!airMouseEnabled) gestureHandler.postDelayed(longPressStart, 620L)
+                    gestureHandler.postDelayed(longPressStart, 620L)
                     // Do not send synthetic mouse-down/up packets here: on some
                     // EShare builds those reset the relative pointer to screen center.
                     true
