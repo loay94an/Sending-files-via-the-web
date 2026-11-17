@@ -30,7 +30,13 @@ class MainActivity : Activity() {
     // Keep pointer traffic off the discovery/key-command executor to avoid input stalls.
     private val airMouseIo = Executors.newSingleThreadExecutor()
     private val airMouseLock = Any()
+    private val gyroPositionLock = Any()
     private val socketWriteLock = Any()
+    private var gyroCursorX = 640f
+    private var gyroCursorY = 360f
+    private var pendingGyroPosition: Pair<Float, Float>? = null
+    private var gyroPositionWriteQueued = false
+    private var lastTouchMoveAt = 0L
     private var pendingAirDx = 0f
     private var pendingAirDy = 0f
     private var airMouseWriteQueued = false
@@ -222,30 +228,31 @@ class MainActivity : Activity() {
         touchPad.setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
-                    downX = event.x; downY = event.y; moved = false; true
+                    downX = event.x; downY = event.y; moved = false
+                    sendTouchSlideEvent(view, event, 0)
+                    true
                 }
                 android.view.MotionEvent.ACTION_MOVE -> {
                     val dx = event.x - downX
                     val dy = event.y - downY
                     if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > dp(1)) moved = true
                     if (moved) {
-                        // EShare maps pointer deltas to a 1280x720 logical surface.
-                        // Scale by the actual touch surface dimensions for consistent travel.
-                        val scaleX = 1280f / view.width.coerceAtLeast(1)
-                        val scaleY = 720f / view.height.coerceAtLeast(1)
-                        // Touchpad mapping: finger movement and cursor movement must have the same direction.
-                        // Lower gain prevents the cursor from racing to the screen edges.
-                        sendAirMouse(dx * scaleX * touchSensitivity, dy * scaleY * touchSensitivity)
-                        downX = event.x; downY = event.y
+                        // EShare's original touchpad uses SLIDEEVENT with scaled screen coordinates,
+                        // not AIRMOUSEEVNET relative deltas.
+                        sendTouchSlideEvent(view, event, 2)
                     }
                     true
                 }
                 android.view.MotionEvent.ACTION_UP -> {
+                    sendTouchSlideEvent(view, event, 1)
                     if (!moved) sendKey(23)
                     view.performClick()
                     true
                 }
-                android.view.MotionEvent.ACTION_CANCEL -> true
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    sendTouchSlideEvent(view, event, 3)
+                    true
+                }
                 else -> true
             }
         }
@@ -779,20 +786,82 @@ class MainActivity : Activity() {
             lastGyroTimestamp = now
             if (previous == 0L) return
             val dt = ((now - previous) / 1_000_000_000f).coerceIn(0f, 0.05f)
-            // Ignore tiny sensor noise, reduce gain, and cap spikes before smoothing.
-            val rawX = event.values[2] * dt
-            val rawY = event.values[0] * dt
-            val targetDx = if (kotlin.math.abs(rawX) < 0.00035f) 0f
-                else (-rawX * 1280f * 1.3f * gyroSensitivity).coerceIn(-12f, 12f)
-            val targetDy = if (kotlin.math.abs(rawY) < 0.00035f) 0f
-                else (-rawY * 720f * 1.6f * gyroSensitivity).coerceIn(-12f, 12f)
-            // Exponential smoothing reduces jitter while preserving the established direction.
-            smoothedGyroDx += (targetDx - smoothedGyroDx) * gyroSmoothing
-            smoothedGyroDy += (targetDy - smoothedGyroDy) * gyroSmoothing
-            // Suppress residual sensor jitter without repeatedly emitting near-zero packets.
-            val outX = if (kotlin.math.abs(smoothedGyroDx) < 0.035f) 0f else smoothedGyroDx
-            val outY = if (kotlin.math.abs(smoothedGyroDy) < 0.035f) 0f else smoothedGyroDy
-            if (outX != 0f || outY != 0f) sendAirMouse(outX, outY)
+            // EShare's original air mouse sends GYROSCOPEEVENT with an ABSOLUTE
+            // 1280x720 cursor position. AIRMOUSEEVNET is not the gyro protocol.
+            // Remove stationary gyro bias, integrate angular velocity, and keep
+            // the cursor position between packets instead of restarting at center.
+            val rateX = if (kotlin.math.abs(event.values[2]) < 0.015f) 0f else event.values[2]
+            val rateY = if (kotlin.math.abs(event.values[0]) < 0.015f) 0f else event.values[0]
+            val targetDx = -rateX * dt * 100f
+            val targetDy = -rateY * dt * 100f
+            smoothedGyroDx += (targetDx - smoothedGyroDx) * 0.45f
+            smoothedGyroDy += (targetDy - smoothedGyroDy) * 0.45f
+            if (smoothedGyroDx != 0f || smoothedGyroDy != 0f) {
+                gyroCursorX = (gyroCursorX + smoothedGyroDx).coerceIn(0f, 1280f)
+                gyroCursorY = (gyroCursorY + smoothedGyroDy).coerceIn(0f, 720f)
+                sendGyroPosition(gyroCursorX, gyroCursorY)
+            }
+        }
+    }
+
+    private fun sendTouchSlideEvent(view: View, event: android.view.MotionEvent, action: Int) {
+        if (action == 2) {
+            val now = System.currentTimeMillis()
+            if (now - lastTouchMoveAt < 55L) return
+            lastTouchMoveAt = now
+        }
+        val x = (event.x * 1280f / view.width.coerceAtLeast(1)).coerceIn(0f, 1280f)
+        val y = (event.y * 720f / view.height.coerceAtLeast(1)).coerceIn(0f, 720f)
+        val packet = "SLIDEEVENT\\r\\n0\\r\\n$action\\r\\n[={$x,$y}]\\r\\n\\r\\n"
+        airMouseIo.execute {
+            try {
+                writePointerPacket(packet)
+            } catch (e: Exception) {
+                closeConnection()
+                setStatus("تعذر تحريك لوحة اللمس: ${e.message ?: "أعد الاتصال"}")
+            }
+        }
+    }
+
+    private fun sendGyroPosition(x: Float, y: Float) {
+        synchronized(gyroPositionLock) {
+            pendingGyroPosition = x to y
+            if (gyroPositionWriteQueued) return
+            gyroPositionWriteQueued = true
+        }
+        // Coalesce sensor updates to the newest absolute position; never queue stale deltas.
+        airMouseIo.execute { drainGyroPosition() }
+    }
+
+    private fun drainGyroPosition() {
+        try {
+            while (true) {
+                val position = synchronized(gyroPositionLock) {
+                    val next = pendingGyroPosition
+                    pendingGyroPosition = null
+                    if (next == null) gyroPositionWriteQueued = false
+                    next
+                } ?: break
+                writePointerPacket("GYROSCOPEEVENT\\r\\n${position.first}\\r\\n${position.second}\\r\\n-1\\r\\n\\r\\n")
+            }
+        } catch (e: Exception) {
+            synchronized(gyroPositionLock) {
+                pendingGyroPosition = null
+                gyroPositionWriteQueued = false
+            }
+            closeConnection()
+            setStatus("تعذر تحريك الماوس الهوائي: ${e.message ?: "أعد الاتصال"}")
+        }
+    }
+
+    private fun writePointerPacket(packet: String) {
+        if (tcp?.isConnected != true || tcp?.isClosed != false) {
+            val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
+            connect(Device("التلفاز", ip, discoverPort(ip)))
+        }
+        synchronized(socketWriteLock) {
+            output?.write(packet.toByteArray(Charsets.UTF_8))
+            output?.flush()
         }
     }
 
