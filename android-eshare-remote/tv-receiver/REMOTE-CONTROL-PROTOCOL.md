@@ -8,7 +8,7 @@
 ## TCP protocol (UTF-8, one command per line)
 - `PAIR <6-digit-pin>` — establishes the socket session.
 - `PING` / `PONG`
-- `ACTION KEY <BACK|HOME|RECENTS|VOLUME_UP|VOLUME_DOWN|MUTE|NOTIFICATIONS|QUICK_SETTINGS>`
+- `ACTION KEY <DPAD_UP|DPAD_DOWN|DPAD_LEFT|DPAD_RIGHT|SELECT|BACK|HOME|RECENTS|VOLUME_UP|VOLUME_DOWN|MUTE|NOTIFICATIONS|QUICK_SETTINGS>`
 - `ACTION TAP <x> <y>` — normalized screen coordinates (0–10000) independent of TV resolution.
 - `ACTION SWIPE <x1> <y1> <x2> <y2> <duration-ms>`
 - `ACTION LONG_PRESS <x> <y> <duration-ms>`
