@@ -182,8 +182,10 @@ class TvReceiverActivity : Activity() {
                         if (assets != null) {
                             for (i in 0 until assets.length()) {
                                 val asset = assets.optJSONObject(i) ?: continue
-                                if (asset.optString("name").startsWith("wasla-tv-receiver") &&
-                                    asset.optString("name").endsWith(".apk")) {
+                                val assetName = asset.optString("name")
+                                if (assetName.startsWith("wasla-tv-receiver-") && assetName.endsWith(".apk")) {
+                                    latestVersion = assetName.removePrefix("wasla-tv-receiver-")
+                                        .removeSuffix(".apk").removePrefix("v")
                                     downloadUrl = asset.optString("browser_download_url", downloadUrl)
                                     break
                                 }
