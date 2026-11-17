@@ -10,6 +10,9 @@ import android.os.IBinder
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.Executors
@@ -20,10 +23,14 @@ class WaslaLocalServerService : Service() {
     private val clients = Executors.newCachedThreadPool()
     @Volatile private var listener: ServerSocket? = null
     @Volatile private var acceptThread: Thread? = null
+    private val discoveryRunning = AtomicBoolean(false)
+    @Volatile private var discoverySocket: DatagramSocket? = null
+    @Volatile private var discoveryThread: Thread? = null
     override fun onCreate() {
         super.onCreate()
         startForeground(NOTIFICATION_ID, buildNotification())
         startServer()
+        startDiscoveryResponder()
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startServer()
@@ -47,6 +54,34 @@ class WaslaLocalServerService : Service() {
             }
         }, "wasla-tv-local-server").apply { isDaemon = true; start() }
     }
+    // LAN discovery is deliberately separate from EShare discovery. The phone
+    // broadcasts a short probe; this receiver replies with its stable identity and
+    // local endpoint, without exposing the pairing PIN in a broadcast packet.
+    private fun startDiscoveryResponder() {
+        if (!discoveryRunning.compareAndSet(false, true)) return
+        discoveryThread = Thread({
+            try {
+                val socket = DatagramSocket(DISCOVERY_PORT).apply { reuseAddress = true }
+                discoverySocket = socket
+                val buffer = ByteArray(256)
+                while (discoveryRunning.get()) {
+                    val request = DatagramPacket(buffer, buffer.size)
+                    socket.receive(request)
+                    val message = String(request.data, request.offset, request.length, Charsets.UTF_8).trim()
+                    if (message != DISCOVERY_REQUEST) continue
+                    val response = "WASLA-TV-DISCOVER/1 ${deviceId(this)} ${localIpv4()} $PORT"
+                        .toByteArray(Charsets.UTF_8)
+                    socket.send(DatagramPacket(response, response.size, request.address, request.port))
+                }
+            } catch (_: Exception) {
+                // Closing the socket during service shutdown is expected.
+            } finally {
+                discoveryRunning.set(false)
+                discoverySocket = null
+            }
+        }, "wasla-tv-discovery").apply { isDaemon = true; start() }
+    }
+
     private fun handleClient(socket: java.net.Socket) {
         socket.use { client ->
             client.soTimeout = 15_000
@@ -90,13 +125,18 @@ class WaslaLocalServerService : Service() {
     override fun onDestroy() {
         running.set(false)
         try { listener?.close() } catch (_: Exception) { }
+        try { discoverySocket?.close() } catch (_: Exception) { }
+        discoveryRunning.set(false)
         acceptThread?.interrupt()
+        discoveryThread?.interrupt()
         clients.shutdownNow()
         super.onDestroy()
     }
     override fun onBind(intent: Intent?): IBinder? = null
     companion object {
         const val PORT = 38471
+        const val DISCOVERY_PORT = 38470
+        const val DISCOVERY_REQUEST = "WASLA_DISCOVER/1"
         private const val CHANNEL = "wasla_tv_server"
         private const val NOTIFICATION_ID = 38471
         private const val PREFS = "wasla_tv_identity"
