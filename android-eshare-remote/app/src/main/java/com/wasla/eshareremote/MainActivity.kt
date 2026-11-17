@@ -1,6 +1,7 @@
 package com.wasla.eshareremote
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.Manifest
 import android.os.Bundle
 import android.speech.RecognizerIntent
@@ -98,6 +99,11 @@ class MainActivity : Activity() {
     private lateinit var textInput: EditText
     private var suppressTextWatcher = false
     private val prefs by lazy { getSharedPreferences("remote", Context.MODE_PRIVATE) }
+    @Volatile private var waslaTvSocket: Socket? = null
+    @Volatile private var waslaTvOutput: OutputStream? = null
+    private val waslaTvLock = Any()
+    private val waslaLinkExecutor = Executors.newSingleThreadExecutor()
+    private val waslaLinkMonitor = Executors.newSingleThreadScheduledExecutor()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -118,6 +124,9 @@ class MainActivity : Activity() {
         registerNetworkCallback()
         discoverAndConnect()
         startConnectionMonitor()
+        val savedWaslaIp = prefs.getString("wasla_tv_ip", "") ?: ""
+        val savedWaslaCode = prefs.getString("wasla_tv_code", "") ?: ""
+        if (savedWaslaIp.isNotBlank() && savedWaslaCode.isNotBlank()) connectWaslaReceiver(savedWaslaIp, savedWaslaCode)
     }
 
     private fun buildUi() {
@@ -298,8 +307,11 @@ class MainActivity : Activity() {
         }
         connection.addView(connectButton, LinearLayout.LayoutParams(dp(82), dp(40)))
         root.addView(connection, LinearLayout.LayoutParams(-1, dp(43)).apply {
-            topMargin = dp(7); bottomMargin = dp(7)
+            topMargin = dp(7); bottomMargin = dp(3)
         })
+        root.addView(makeButton("ربط مستقبل وصلة على التلفاز", 40).apply {
+            setOnClickListener { showWaslaPairDialog() }
+        }, LinearLayout.LayoutParams(-1, dp(42)).apply { bottomMargin = dp(5) })
 
         val touchPad = FrameLayout(this).apply {
             background = surface(0xff102c50.toInt(), 25, 0xff168fd2.toInt())
@@ -1462,6 +1474,106 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun showWaslaPairDialog() {
+        val fields = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val ip = EditText(this).apply {
+            hint = "عنوان IP للتلفاز (مثال 192.168.1.20)"
+            setSingleLine(true)
+            setText(prefs.getString("wasla_tv_ip", ""))
+        }
+        val code = EditText(this).apply {
+            hint = "رمز الاقتران الظاهر على التلفاز"
+            setSingleLine(true)
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText(prefs.getString("wasla_tv_code", ""))
+        }
+        fields.addView(ip)
+        fields.addView(code)
+        AlertDialog.Builder(this)
+            .setTitle("ربط مستقبل وصلة")
+            .setMessage("افتح Wasla TV على التلفاز، ثم أدخل عنوان الشبكة ورمز الاقتران الظاهرين على الشاشة.")
+            .setView(fields)
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("اتصال") { _, _ ->
+                connectWaslaReceiver(ip.text.toString().trim(), code.text.toString().trim())
+            }
+            .show()
+    }
+
+    private fun connectWaslaReceiver(ip: String, code: String) {
+        if (ip.isBlank() || !code.matches(Regex("\\d{6}"))) {
+            setStatus("أدخل عنوان التلفاز ورمز الاقتران المكوّن من 6 أرقام")
+            return
+        }
+        waslaLinkExecutor.execute {
+            closeWaslaReceiver()
+            try {
+                val socket = Socket()
+                socket.tcpNoDelay = true
+                socket.keepAlive = true
+                socket.connect(InetSocketAddress(ip, 38471), 5000)
+                socket.soTimeout = 5000
+                val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)
+                val writer = socket.getOutputStream().bufferedWriter(Charsets.UTF_8)
+                writer.write("PAIR $code\n")
+                writer.flush()
+                val greeting = reader.readLine()
+                if (greeting?.startsWith("OK WASLA-TV/1") != true) {
+                    socket.close()
+                    throw IllegalStateException("رفض التلفاز رمز الاقتران")
+                }
+                socket.soTimeout = 0
+                synchronized(waslaTvLock) {
+                    waslaTvSocket = socket
+                    waslaTvOutput = socket.getOutputStream()
+                }
+                prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code).apply()
+                setStatus("متصل بمستقبل وصلة على التلفاز — اتصال محلي")
+                waslaLinkMonitor.scheduleWithFixedDelay({
+                    try {
+                        synchronized(waslaTvLock) {
+                            val active = waslaTvSocket ?: return@scheduleWithFixedDelay
+                            val out = waslaTvOutput ?: return@scheduleWithFixedDelay
+                            if (active.isClosed) throw IllegalStateException("socket closed")
+                            out.write("PING\n".toByteArray(Charsets.UTF_8))
+                            out.flush()
+                        }
+                    } catch (_: Exception) {
+                        closeWaslaReceiver()
+                        setStatus("انقطع اتصال مستقبل وصلة — أعد فتح الاتصال المحلي")
+                    }
+                }, 10, 15, TimeUnit.SECONDS)
+                Thread({
+                    try {
+                        while (!socket.isClosed) {
+                            val line = reader.readLine() ?: break
+                            if (line.startsWith("WASLA-TV/1")) setStatus("اتصال وصلة نشط: $ip")
+                        }
+                    } catch (_: Exception) { }
+                    if (waslaTvSocket === socket) {
+                        closeWaslaReceiver()
+                        setStatus("انقطع اتصال مستقبل وصلة")
+                    }
+                }, "wasla-tv-link-reader").apply { isDaemon = true; start() }
+            } catch (e: Exception) {
+                closeWaslaReceiver()
+                setStatus("تعذر الاتصال بمستقبل وصلة: \${e.message ?: "تحقق من IP والرمز"}")
+            }
+        }
+    }
+
+    private fun closeWaslaReceiver() {
+        synchronized(waslaTvLock) {
+            try { waslaTvOutput?.close() } catch (_: Exception) { }
+            try { waslaTvSocket?.close() } catch (_: Exception) { }
+            waslaTvOutput = null
+            waslaTvSocket = null
+        }
+    }
+
     private fun sendKey(key: Int) {
         io.execute {
             try {
@@ -1619,6 +1731,9 @@ class MainActivity : Activity() {
         } catch (_: Exception) { }
         networkCallback = null
         connectionMonitor.shutdownNow()
+        closeWaslaReceiver()
+        waslaLinkMonitor.shutdownNow()
+        waslaLinkExecutor.shutdownNow()
         closeConnection()
         try { localHttpServer?.close() } catch (_: Exception) { }
         localHttpServer = null
