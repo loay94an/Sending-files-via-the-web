@@ -78,6 +78,10 @@ class WaslaLocalServerService : Service() {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startServer()
+        if (intent?.action == ACTION_RECONNECT_RELAY) {
+            try { relaySocket?.close(1000, "Relay settings changed") } catch (_: Exception) { }
+            relaySocket = null
+        }
         connectRelayIfConfigured()
         return START_STICKY
     }
@@ -441,6 +445,7 @@ class WaslaLocalServerService : Service() {
         const val PORT = 38471
         const val DISCOVERY_PORT = 38470
         const val FILE_PORT = 38472
+        const val ACTION_RECONNECT_RELAY = "com.wasla.tv.RECONNECT_RELAY"
         private const val MAX_FILE_BYTES = 536870912L
         const val DISCOVERY_REQUEST = "WASLA_DISCOVER/1"
         private const val CHANNEL = "wasla_tv_server"
