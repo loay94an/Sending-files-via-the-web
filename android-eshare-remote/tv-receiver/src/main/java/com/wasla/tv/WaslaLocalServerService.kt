@@ -202,7 +202,7 @@ class WaslaLocalServerService : Service() {
             output.writeUTF("OK WASLA-FILES/1"); output.flush()
             try {
                 when (val command = input.readUTF()) {
-                    "LIST" -> {
+                    command == "LIST" || command.startsWith("LIST ") -> {
                         val root = selectedFolder()
                         val requested = command.removePrefix("LIST").trim()
                         val current = if (requested.isBlank()) root else try {
@@ -300,21 +300,23 @@ class WaslaLocalServerService : Service() {
                                 else {
                                     val uriText = String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
                                     val uri = Uri.parse(uriText)
-                                    val doc = selectedFolder()?.listFiles()?.firstOrNull { it.uri == uri }
+                                    val doc = selectedFolder()?.let { findSharedDocument(uri, it) }
                                     output.writeUTF(if (doc?.canWrite() == true && !doc.isDirectory && doc.delete()) "DELETED" else "ERROR DELETE_FAILED")
                                 }
                             }
                             "MKDIR" -> {
-                                if (parts.size != 2) output.writeUTF("ERROR BAD_REQUEST")
+                                if (parts.size != 3) output.writeUTF("ERROR BAD_REQUEST")
                                 else {
-                                    val name = String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
+                                    val uri = Uri.parse(String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8))
+                                    val name = String(Base64.decode(parts[2], Base64.NO_WRAP), Charsets.UTF_8)
                                     val root = selectedFolder()
+                                    val parent = root?.let { findSharedDocument(uri, it) }
                                     val valid = name.isNotBlank() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\\\') && name.length <= 120
                                     output.writeUTF(when {
-                                        root == null || !root.canWrite() -> "ERROR FOLDER_NOT_WRITABLE"
+                                        parent == null || !parent.isDirectory || !parent.canWrite() -> "ERROR FOLDER_NOT_WRITABLE"
                                         !valid -> "ERROR INVALID_NAME"
-                                        root.findFile(name) != null -> "ERROR NAME_EXISTS"
-                                        root.createDirectory(name) != null -> "CREATED"
+                                        parent.findFile(name) != null -> "ERROR NAME_EXISTS"
+                                        parent.createDirectory(name) != null -> "CREATED"
                                         else -> "ERROR CREATE_FAILED"
                                     })
                                 }
