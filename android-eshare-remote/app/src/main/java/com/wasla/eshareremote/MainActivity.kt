@@ -757,7 +757,7 @@ class MainActivity : Activity() {
         // or mapped incorrectly on TVs with another framebuffer resolution.
         try {
             socket.soTimeout = 1200
-            output?.write("GETFBINFO\\r\\n1\\r\\n\\r\\n".toByteArray(Charsets.UTF_8))
+            output?.write("GETFBINFO\r\n1\r\n\r\n".toByteArray(Charsets.UTF_8))
             output?.flush()
             val response = ByteArray(1024)
             val count = socket.getInputStream().read(response)
