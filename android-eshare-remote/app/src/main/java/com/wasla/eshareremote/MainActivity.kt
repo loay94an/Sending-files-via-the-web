@@ -721,8 +721,9 @@ class MainActivity : Activity() {
         } catch (_: Exception) { }
 
         val saved = prefs.getString("ip", null)
-        if (!saved.isNullOrBlank() && isControlPortOpen(saved, 8121)) {
-            return Device("التلفاز المحفوظ", saved, 8121)
+        val savedPort = prefs.getInt("port", 8121)
+        if (!saved.isNullOrBlank() && isControlPortOpen(saved, savedPort)) {
+            return Device("التلفاز المحفوظ", saved, savedPort)
         }
 
         data class Subnet(val local: InetAddress, val broadcast: InetAddress, val prefix: Int)
@@ -892,7 +893,7 @@ class MainActivity : Activity() {
         }
         gyroCursorX = framebufferWidth / 2f
         gyroCursorY = framebufferHeight / 2f
-        prefs.edit().putString("ip", device.ip).apply()
+        prefs.edit().putString("ip", device.ip).putInt("port", device.port).apply()
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
     }
 
@@ -1029,7 +1030,8 @@ class MainActivity : Activity() {
             fun writeOnce() {
                 if (tcp?.isConnected != true || tcp?.isClosed != false || tcp?.isOutputShutdown == true) {
                     val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
-                    connect(Device("التلفاز", ip, discoverPort(ip)))
+                    val port = prefs.getInt("port", 8121)
+                    connect(Device("التلفاز", ip, port))
                 }
                 synchronized(socketWriteLock) {
                     val stream = output ?: throw IllegalStateException("جلسة التحكم غير جاهزة")
@@ -1043,7 +1045,8 @@ class MainActivity : Activity() {
                 closeConnection()
                 try {
                     val ip = prefs.getString("ip", null) ?: throw first
-                    connect(Device("التلفاز", ip, discoverPort(ip)))
+                    val port = prefs.getInt("port", 8121)
+                    connect(Device("التلفاز", ip, port))
                     writeOnce()
                     setStatus("أُعيد الاتصال بالتلفاز تلقائياً")
                 } catch (second: Exception) {
@@ -1121,7 +1124,8 @@ class MainActivity : Activity() {
     private fun startConnectionMonitor() {
         connectionMonitor.scheduleWithFixedDelay({
             val ip = prefs.getString("ip", null) ?: return@scheduleWithFixedDelay
-            val reachable = isControlPortOpen(ip, 8121)
+            val port = prefs.getInt("port", 8121)
+            val reachable = isControlPortOpen(ip, port)
             if (!reachable) {
                 if (tcp != null) {
                     closeConnection()
