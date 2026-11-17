@@ -105,6 +105,10 @@ class MainActivity : Activity() {
     private val waslaTvLock = Any()
     private val waslaLinkExecutor = Executors.newSingleThreadExecutor()
     private val waslaLinkMonitor = Executors.newSingleThreadScheduledExecutor()
+    private val waslaConnecting = AtomicBoolean(false)
+    private val waslaMonitorStarted = AtomicBoolean(false)
+    @Volatile private var lastWaslaPongAt = 0L
+    @Volatile private var lastWaslaPingAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -127,6 +131,7 @@ class MainActivity : Activity() {
         startConnectionMonitor()
         val savedWaslaIp = prefs.getString("wasla_tv_ip", "") ?: ""
         val savedWaslaCode = prefs.getString("wasla_tv_code", "") ?: ""
+        startWaslaLinkMonitor()
         if (savedWaslaIp.isNotBlank() && savedWaslaCode.isNotBlank()) connectWaslaReceiver(savedWaslaIp, savedWaslaCode)
     }
 
@@ -1504,17 +1509,18 @@ class MainActivity : Activity() {
                 throw IllegalArgumentException("بيانات الاقتران غير مكتملة أو غير صالحة")
             }
             setStatus("تمت قراءة رمز الشاشة — جارٍ الاقتران...")
-            connectWaslaReceiver(ip, code)
+            connectWaslaReceiver(ip, code, deviceId)
         } catch (e: Exception) {
             setStatus("تعذر قراءة رمز وصلة: ${e.message ?: "رمز غير صالح"}")
         }
     }
 
-    private fun connectWaslaReceiver(ip: String, code: String) {
+    private fun connectWaslaReceiver(ip: String, code: String, expectedDeviceId: String? = null) {
         if (ip.isBlank() || !code.matches(Regex("\\d{6}"))) {
-            setStatus("أدخل عنوان التلفاز ورمز الاقتران المكوّن من 6 أرقام")
+            setStatus("بيانات الاقتران غير صالحة")
             return
         }
+        if (!waslaConnecting.compareAndSet(false, true)) return
         waslaLinkExecutor.execute {
             closeWaslaReceiver()
             try {
@@ -1525,51 +1531,92 @@ class MainActivity : Activity() {
                 socket.soTimeout = 5000
                 val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)
                 val writer = socket.getOutputStream().bufferedWriter(Charsets.UTF_8)
-                writer.write("PAIR $code\n")
+                writer.write("PAIR $code\\n")
                 writer.flush()
                 val greeting = reader.readLine()
                 if (greeting?.startsWith("OK WASLA-TV/1") != true) {
                     socket.close()
                     throw IllegalStateException("رفض التلفاز رمز الاقتران")
                 }
-                socket.soTimeout = 0
+                // Bind the scanned QR identity to the endpoint so a stale/forged
+                // QR cannot silently pair with a different receiver on the same IP.
+                writer.write("INFO\\n")
+                writer.flush()
+                val info = reader.readLine().orEmpty().split(' ')
+                if (info.size < 3 || info[0] != "WASLA-TV/1" ||
+                    (!expectedDeviceId.isNullOrBlank() && info[1] != expectedDeviceId)) {
+                    socket.close()
+                    throw IllegalStateException("هوية مستقبل وصلة لا تطابق رمز QR")
+                }
+                socket.soTimeout = 20000
                 synchronized(waslaTvLock) {
                     waslaTvSocket = socket
                     waslaTvOutput = socket.getOutputStream()
                 }
+                val now = android.os.SystemClock.elapsedRealtime()
+                lastWaslaPongAt = now
+                lastWaslaPingAt = now
                 prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code).apply()
                 setStatus("متصل بمستقبل وصلة على التلفاز — اتصال محلي")
-                waslaLinkMonitor.scheduleWithFixedDelay({
-                    try {
-                        synchronized(waslaTvLock) {
-                            val active = waslaTvSocket ?: return@scheduleWithFixedDelay
-                            val out = waslaTvOutput ?: return@scheduleWithFixedDelay
-                            if (active.isClosed) throw IllegalStateException("socket closed")
-                            out.write("PING\n".toByteArray(Charsets.UTF_8))
-                            out.flush()
-                        }
-                    } catch (_: Exception) {
-                        closeWaslaReceiver()
-                        setStatus("انقطع اتصال مستقبل وصلة — أعد فتح الاتصال المحلي")
-                    }
-                }, 10, 15, TimeUnit.SECONDS)
                 Thread({
                     try {
                         while (!socket.isClosed) {
-                            val line = reader.readLine() ?: break
-                            if (line.startsWith("WASLA-TV/1")) setStatus("اتصال وصلة نشط: $ip")
+                            val line = try { reader.readLine() } catch (_: SocketTimeoutException) { continue } ?: break
+                            if (line == "PONG") {
+                                lastWaslaPongAt = android.os.SystemClock.elapsedRealtime()
+                            } else if (line.startsWith("WASLA-TV/1")) {
+                                setStatus("اتصال وصلة نشط: $ip")
+                            }
                         }
                     } catch (_: Exception) { }
                     if (waslaTvSocket === socket) {
                         closeWaslaReceiver()
-                        setStatus("انقطع اتصال مستقبل وصلة")
+                        setStatus("انقطع اتصال مستقبل وصلة — ستتم إعادة المحاولة تلقائياً")
                     }
                 }, "wasla-tv-link-reader").apply { isDaemon = true; start() }
             } catch (e: Exception) {
                 closeWaslaReceiver()
-                setStatus("تعذر الاتصال بمستقبل وصلة: ${e.message ?: "تحقق من IP والرمز"}")
+                setStatus("تعذر الاتصال بمستقبل وصلة: ${e.message ?: "تحقق من الشبكة ورمز الاقتران"}")
+            } finally {
+                waslaConnecting.set(false)
             }
         }
+    }
+
+    private fun startWaslaLinkMonitor() {
+        if (!waslaMonitorStarted.compareAndSet(false, true)) return
+        waslaLinkMonitor.scheduleWithFixedDelay({
+            val socket = waslaTvSocket
+            if (socket == null || socket.isClosed || !socket.isConnected) {
+                val ip = prefs.getString("wasla_tv_ip", "") ?: ""
+                val code = prefs.getString("wasla_tv_code", "") ?: ""
+                if (ip.isNotBlank() && code.matches(Regex("\\d{6}")) && !waslaConnecting.get()) {
+                    connectWaslaReceiver(ip, code)
+                }
+                return@scheduleWithFixedDelay
+            }
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastWaslaPongAt > 40000L) {
+                closeWaslaReceiver()
+                setStatus("انتهت مهلة اتصال وصلة — جارٍ إعادة الاتصال...")
+                return@scheduleWithFixedDelay
+            }
+            if (now - lastWaslaPingAt >= 15000L) {
+                try {
+                    synchronized(waslaTvLock) {
+                        val active = waslaTvSocket ?: return@scheduleWithFixedDelay
+                        val out = waslaTvOutput ?: return@scheduleWithFixedDelay
+                        if (active.isClosed) throw IllegalStateException("socket closed")
+                        out.write("PING\\n".toByteArray(Charsets.UTF_8))
+                        out.flush()
+                        lastWaslaPingAt = now
+                    }
+                } catch (_: Exception) {
+                    closeWaslaReceiver()
+                    setStatus("انقطع اتصال مستقبل وصلة — جارٍ إعادة المحاولة...")
+                }
+            }
+        }, 5, 5, TimeUnit.SECONDS)
     }
 
     private fun closeWaslaReceiver() {
