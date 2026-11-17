@@ -1106,7 +1106,7 @@ class MainActivity : Activity() {
                 writePacketWithReconnect("CONTENT\r\n1\r\n0 $text\r\n\r\n")
                 setStatus("تم إرسال النص إلى التلفاز")
             } catch (e: Exception) {
-                setStatus("تعذر إرسال النص: \${e.message ?: "تحقق من الاتصال"}")
+                setStatus("تعذر إرسال النص: " + (e.message ?: "تحقق من الاتصال"))
             }
         }
     }
