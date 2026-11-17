@@ -2,6 +2,8 @@ package com.wasla.eshareremote
 
 import android.app.Activity
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -64,6 +66,7 @@ class MainActivity : Activity() {
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
     private lateinit var textInput: EditText
+    private var suppressTextWatcher = false
     private val prefs by lazy { getSharedPreferences("remote", Context.MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -185,7 +188,7 @@ class MainActivity : Activity() {
             hint = "اكتب نصاً لإرساله إلى التلفاز"
             textSize = 14f
             setSingleLine(true)
-            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
             inputType = android.text.InputType.TYPE_CLASS_TEXT
             layoutDirection = View.LAYOUT_DIRECTION_RTL
             setTextColor(white)
@@ -200,15 +203,30 @@ class MainActivity : Activity() {
                 val value = textInput.text.toString()
                 if (value.isNotBlank()) {
                     sendText(value)
+                    suppressTextWatcher = true
                     textInput.text.clear()
+                    suppressTextWatcher = false
                     val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
                     imm.hideSoftInputFromWindow(textInput.windowToken, 0)
                 }
             }
         }
         textEntry.addView(sendTextButton, LinearLayout.LayoutParams(dp(76), dp(42)))
+        var previousTextLength = 0
+        textInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+                previousTextLength = s?.length ?: 0
+            }
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                if (!suppressTextWatcher) {
+                    sendComposingText(previousTextLength, s?.toString().orEmpty())
+                }
+            }
+        })
         textInput.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE ||
+                actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
                 sendTextButton.performClick()
                 true
             } else false
@@ -1095,14 +1113,24 @@ class MainActivity : Activity() {
         }
     }
 
-    // The original EShare keyboard sends Unicode through CONTENT rather than Latin key positions.
-    // Action 0 updates composing text; action 1 commits it. UTF-8 preserves Arabic strings.
+    // Match EShare's original keyboard protocol: update composing text on every edit
+    // using the previous text length, then commit once when the user presses Send/Done.
+    private fun sendComposingText(previousLength: Int, value: String) {
+        val text = value.replace("\r", "").replace("\n", " ")
+        io.execute {
+            try {
+                writePacketWithReconnect("CONTENT\r\n0\r\n$previousLength $text\r\n\r\n")
+            } catch (e: Exception) {
+                setStatus("تعذر تحديث النص: " + (e.message ?: "تحقق من الاتصال"))
+            }
+        }
+    }
+
     private fun sendText(value: String) {
         val text = value.replace("\r", "").replace("\n", " ")
         if (text.isBlank()) return
         io.execute {
             try {
-                writePacketWithReconnect("CONTENT\r\n0\r\n0 $text\r\n\r\n")
                 writePacketWithReconnect("CONTENT\r\n1\r\n0 $text\r\n\r\n")
                 setStatus("تم إرسال النص إلى التلفاز")
             } catch (e: Exception) {
