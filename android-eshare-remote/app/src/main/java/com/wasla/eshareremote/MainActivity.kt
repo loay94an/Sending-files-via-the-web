@@ -117,6 +117,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
+    private var connectionIpLabel: TextView? = null
     private lateinit var textInput: EditText
     private var suppressTextWatcher = false
     private val prefs by lazy { getSharedPreferences("remote", Context.MODE_PRIVATE) }
@@ -251,6 +252,60 @@ class MainActivity : Activity() {
         })
         root.addView(header, lp(-1, dp(72)))
 
+        // Separate direct discovery from QR pairing for a clearer two-action connection UI.
+        ipInput = EditText(this) // retained internally for discovered-IP compatibility; not shown in the main UI
+        val connectionActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            background = surface(0xff0c192d.toInt(), 16, 0xff263f61.toInt())
+            setPadding(dp(7), dp(3), dp(7), dp(3))
+        }
+        connectButton = makeButton("اتصال", 40, true).apply {
+            textSize = 13f
+            setOnClickListener { discoverWaslaThenEShare() }
+        }
+        connectionActions.addView(connectButton, LinearLayout.LayoutParams(dp(104), dp(40)).apply {
+            marginEnd = dp(7)
+        })
+        val qrButton = makeButton("⌗", 38, false).apply {
+            textSize = 18f
+            contentDescription = "مسح رمز QR للاتصال"
+            setOnClickListener { startWaslaQrScanner() }
+        }
+        connectionActions.addView(qrButton, LinearLayout.LayoutParams(dp(40), dp(38)).apply {
+            marginEnd = dp(9)
+        })
+        connectionIpLabel = TextView(this).apply {
+            text = "⌁  غير متصل"
+            textSize = 12f
+            setTextColor(0xff9eb5d4.toInt())
+            gravity = Gravity.CENTER_VERTICAL or Gravity.START
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        connectionActions.addView(connectionIpLabel, LinearLayout.LayoutParams(0, dp(38), 1f))
+        root.addView(connectionActions, LinearLayout.LayoutParams(-1, dp(46)).apply {
+            topMargin = dp(7); bottomMargin = dp(3)
+        })
+
+        val shortcuts = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
+        val castButton = makeButton("▣  مشاركة الشاشة", 48, true).apply {
+            textSize = 13f
+            setOnClickListener { openScreenShareSettings() }
+        }
+        shortcuts.addView(castButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(5) })
+        val filesButton = makeButton("⇧  نقل الملفات", 48).apply {
+            textSize = 13f
+            setOnClickListener { pickFileForTv() }
+        }
+        shortcuts.addView(filesButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(5) })
+        root.addView(shortcuts, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(7); bottomMargin = dp(3) })
+
         // Phone keyboard input sits above the sharing and file-transfer shortcuts.
         val textEntry = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -298,47 +353,6 @@ class MainActivity : Activity() {
             } else false
         }
         root.addView(textEntry, LinearLayout.LayoutParams(-1, dp(52)).apply {
-            topMargin = dp(7); bottomMargin = dp(3)
-        })
-
-        val shortcuts = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
-        }
-        val castButton = makeButton("▣  مشاركة الشاشة", 48, true).apply {
-            textSize = 13f
-            setOnClickListener { openScreenShareSettings() }
-        }
-        shortcuts.addView(castButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(5) })
-        val filesButton = makeButton("⇧  نقل الملفات", 48).apply {
-            textSize = 13f
-            setOnClickListener { pickFileForTv() }
-        }
-        shortcuts.addView(filesButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(5) })
-        root.addView(shortcuts, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(7); bottomMargin = dp(3) })
-
-        // Separate direct discovery from QR pairing for a clearer two-action connection UI.
-        ipInput = EditText(this) // retained internally for discovered-IP compatibility; not shown in the main UI
-        val connectionActions = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-        }
-        connectButton = makeButton("اتصال", 48, true).apply {
-            textSize = 15f
-            setOnClickListener { discoverWaslaThenEShare() }
-        }
-        val qrButton = makeButton("مسح QR", 48, false).apply {
-            textSize = 15f
-            setOnClickListener { startWaslaQrScanner() }
-        }
-        connectionActions.addView(connectButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-            marginEnd = dp(5)
-        })
-        connectionActions.addView(qrButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-            marginStart = dp(5)
-        })
-        root.addView(connectionActions, LinearLayout.LayoutParams(-1, dp(48)).apply {
             topMargin = dp(7); bottomMargin = dp(5)
         })
 
@@ -1714,6 +1728,7 @@ class MainActivity : Activity() {
             try { socket.soTimeout = 0 } catch (_: Exception) { }
         }
         startSocketReader(socket)
+        runOnUiThread { connectionIpLabel?.text = "⌁  ${device.ip}" }
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
     }
 
@@ -2043,6 +2058,7 @@ class MainActivity : Activity() {
                 lastWaslaPingAt = now
                 prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code)
                     .putString("wasla_tv_id", expectedDeviceId ?: "").apply()
+                runOnUiThread { connectionIpLabel?.text = "⌁  $ip" }
                 setStatus("متصل بمستقبل وصلة على التلفاز — اتصال محلي")
                 connectWaslaRelay()
                 Thread({
