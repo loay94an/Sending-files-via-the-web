@@ -1504,10 +1504,12 @@ class MainActivity : Activity() {
                             val packet = DatagramPacket(buffer, buffer.size)
                             socket.receive(packet)
                             val fields = String(packet.data, packet.offset, packet.length, Charsets.UTF_8).trim().split(' ')
-                            if (fields.size >= 4 && fields[0] == "WASLA-TV-DISCOVER/1") {
+                            if (fields.size >= 3 && fields[0] == "WASLA-TV-DISCOVER/1") {
                                 val id = fields[1]
-                                val ip = fields[2].ifBlank { packet.address.hostAddress ?: "" }
-                                val port = fields[3].toIntOrNull()
+                                // The UDP source address is the actual responding TV interface;
+                                // do not trust an arbitrary first interface address from the TV.
+                                val ip = packet.address.hostAddress.orEmpty()
+                                val port = fields[2].toIntOrNull()
                                 if (id.isNotBlank() && ip.isNotBlank() && port == 38471) {
                                     found["$id@$ip"] = WaslaReceiverCandidate(id, ip, port)
                                 }
