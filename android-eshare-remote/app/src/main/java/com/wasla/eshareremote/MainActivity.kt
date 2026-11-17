@@ -317,13 +317,27 @@ class MainActivity : Activity() {
         shortcuts.addView(filesButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(5) })
         root.addView(shortcuts, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(7); bottomMargin = dp(3) })
 
-        // One connection entry point: automatic discovery or QR pairing.
+        // Separate direct discovery from QR pairing for a clearer two-action connection UI.
         ipInput = EditText(this) // retained internally for discovered-IP compatibility; not shown in the main UI
+        val connectionActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
         connectButton = makeButton("اتصال", 48, true).apply {
             textSize = 15f
-            setOnClickListener { showConnectionOptions() }
+            setOnClickListener { discoverWaslaThenEShare() }
         }
-        root.addView(connectButton, LinearLayout.LayoutParams(-1, dp(48)).apply {
+        val qrButton = makeButton("مسح QR", 48, false).apply {
+            textSize = 15f
+            setOnClickListener { startWaslaQrScanner() }
+        }
+        connectionActions.addView(connectButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+            marginEnd = dp(5)
+        })
+        connectionActions.addView(qrButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+            marginStart = dp(5)
+        })
+        root.addView(connectionActions, LinearLayout.LayoutParams(-1, dp(48)).apply {
             topMargin = dp(7); bottomMargin = dp(5)
         })
 
