@@ -260,8 +260,9 @@ class MainActivity : Activity() {
                             sendKey(if (totalDy >= 0f) 20 else 19)
                         }
                     } else if (airMouseEnabled) {
-                        // Direction-pad mode keeps its OK/select tap behavior.
-                        sendKey(23)
+                        // Air-mouse tap clicks the current gyro pointer position,
+                        // matching the corrected normal touchpad click behavior.
+                        sendPointerClick()
                     } else if (!moved) {
                         // Click the current absolute pointer position; do not send
                         // KEYEVENT OK, which selects focus rather than the cursor target.
