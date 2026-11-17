@@ -66,12 +66,14 @@ class MainActivity : Activity() {
             it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
                 it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
         } == true
+        // A route change invalidates the old TCP socket, but never discard the
+        // selected TV or start a subnet scan during automatic recovery.
         closeConnection()
-        if (hasUsableNetwork && !reconnecting.get()) {
-            setStatus("تغيّرت الشبكة — جارٍ اكتشاف الشاشة وإعادة الاتصال...")
-            discoverAndConnect()
+        if (hasUsableNetwork) {
+            nextReconnectAt = 0L
+            scheduleAutomaticReconnect("تغيّرت الشبكة — إعادة الاتصال بنفس الشاشة", immediate = true)
         } else {
-            setStatus("بانتظار عودة الشبكة — ستتم إعادة المحاولة تلقائياً...")
+            setStatus("الشبكة غير متاحة — سيُعاد الاتصال بنفس الشاشة عند عودتها")
         }
     }
     private val reconnecting = AtomicBoolean(false)
@@ -132,6 +134,8 @@ class MainActivity : Activity() {
     @Volatile private var lastWaslaPingAt = 0L
     @Volatile private var lastEshareKeepAliveAt = 0L
     @Volatile private var lastFullDiscoveryAt = 0L
+    @Volatile private var nextReconnectAt = 0L
+    @Volatile private var reconnectAttempts = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -150,8 +154,9 @@ class MainActivity : Activity() {
         val saved = prefs.getString("ip", "") ?: ""
         ipInput.setText(saved)
         registerNetworkCallback()
-        discoverAndConnect()
         startConnectionMonitor()
+        if (saved.isNotBlank()) scheduleAutomaticReconnect("استعادة آخر شاشة محفوظة", immediate = true)
+        else discoverAndConnect()
         val savedWaslaIp = prefs.getString("wasla_tv_ip", "") ?: ""
         val savedWaslaCode = prefs.getString("wasla_tv_code", "") ?: ""
         startWaslaLinkMonitor()
@@ -1814,6 +1819,8 @@ class MainActivity : Activity() {
         }
         lastEshareKeepAliveAt = android.os.SystemClock.elapsedRealtime()
         startSocketReader(socket)
+        reconnectAttempts = 0
+        nextReconnectAt = 0L
         runOnUiThread { connectionIpLabel?.text = "⌁  ${device.ip}" }
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
     }
@@ -1976,7 +1983,8 @@ class MainActivity : Activity() {
                     setStatus("أُعيد الاتصال بالتلفاز تلقائياً")
                 } catch (second: Exception) {
                     closeConnection()
-                    setStatus("انقطع الاتصال — جارٍ إعادة المحاولة: ${second.message ?: "تحقق من الشبكة"}")
+                    nextReconnectAt = 0L
+                    setStatus("انقطع الاتصال — ستتم استعادة الشاشة نفسها تلقائياً: ${second.message ?: "تحقق من الشبكة"}")
                     throw second
                 }
             }
@@ -2430,7 +2438,8 @@ class MainActivity : Activity() {
             } finally {
                 if (disconnected && tcp === socket) {
                     closeConnection()
-                    setStatus("انقطع اتصال التلفاز — جارٍ استعادته تلقائياً...")
+                    nextReconnectAt = 0L
+                    setStatus("انقطع اتصال التلفاز — جارٍ استعادته إلى الشاشة نفسها...")
                 }
             }
         }
@@ -2483,34 +2492,67 @@ class MainActivity : Activity() {
     }
 
     private fun startConnectionMonitor() {
-        // Do not create extra TCP probe sessions while the real EShare socket is active.
-        // Network callbacks handle route changes; this loop retries discovery when disconnected.
+        // Keep the selected endpoint pinned. A dropped TCP session is repaired
+        // against that exact IP/port; automatic recovery must never select another TV.
         connectionMonitor.scheduleWithFixedDelay({
             val socket = tcp
-            if (socket != null && !socket.isClosed && socket.isConnected) {
+            if (socket != null && !socket.isClosed && socket.isConnected && !socket.isOutputShutdown) {
                 val now = android.os.SystemClock.elapsedRealtime()
-                if (now - lastEshareKeepAliveAt >= 20000L) {
+                if (now - lastEshareKeepAliveAt >= 15000L) {
                     try {
                         synchronized(socketWriteLock) {
                             if (tcp === socket && !socket.isClosed) {
                                 val stream = output ?: throw IllegalStateException("قناة التحكم مغلقة")
-                                // GETFBINFO is a harmless EShare request already used during
-                                // handshake; periodic requests prevent idle-session expiry.
-                                stream.write("GETFBINFO\r\n1\r\n\r\n".toByteArray(Charsets.UTF_8))
+                                stream.write("GETFBINFO\\r\\n1\\r\\n\\r\\n".toByteArray(Charsets.UTF_8))
                                 stream.flush()
                                 lastEshareKeepAliveAt = now
                             }
                         }
                     } catch (_: Exception) {
                         closeConnection()
-                        setStatus("فُقدت جلسة التحكم — جارٍ استعادتها...")
+                        setStatus("انقطع الاتصال — جارٍ استعادته إلى الشاشة نفسها...")
                     }
                 }
-            } else if (!reconnecting.get()) {
-                setStatus("الاتصال غير نشط — جارٍ استعادة الشاشة تلقائياً...")
-                discoverAndConnect()
+            } else {
+                scheduleAutomaticReconnect("الاتصال غير نشط — استعادة الشاشة المحددة")
             }
         }, 5, 5, TimeUnit.SECONDS)
+    }
+
+    /**
+     * Reconnect only to the user's last selected endpoint. Discovery is reserved
+     * for an explicit Connect tap; background recovery never changes the TV.
+     */
+    private fun scheduleAutomaticReconnect(reason: String, immediate: Boolean = false) {
+        val ip = prefs.getString("ip", "") ?: ""
+        if (ip.isBlank() || isFinishing) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!immediate && now < nextReconnectAt) return
+        if (!reconnecting.compareAndSet(false, true)) return
+        val port = prefs.getInt("port", 8121)
+        setStatus("$reason — جارٍ الاتصال بـ $ip:$port")
+        io.execute {
+            try {
+                val active = tcp
+                if (active != null && !active.isClosed && active.isConnected && !active.isOutputShutdown) {
+                    reconnectAttempts = 0
+                    return@execute
+                }
+                closeConnection()
+                connect(Device(prefs.getString("device_name", "التلفاز") ?: "التلفاز", ip, port))
+                reconnectAttempts = 0
+                nextReconnectAt = 0L
+                setStatus("متصل مجدداً بالشاشة المحددة: $ip")
+            } catch (e: Exception) {
+                reconnectAttempts = (reconnectAttempts + 1).coerceAtMost(6)
+                val delaySeconds = (1L shl reconnectAttempts).coerceIn(2L, 60L)
+                nextReconnectAt = android.os.SystemClock.elapsedRealtime() + TimeUnit.SECONDS.toMillis(delaySeconds)
+                closeConnection()
+                setStatus("الشاشة $ip غير متاحة حالياً — ستتم إعادة المحاولة خلال $delaySeconds ثانية")
+            } finally {
+                reconnecting.set(false)
+            }
+        }
     }
 
     private fun closeConnection() = synchronized(connectionLock) {
