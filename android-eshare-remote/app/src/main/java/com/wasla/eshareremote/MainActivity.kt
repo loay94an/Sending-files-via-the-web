@@ -218,33 +218,39 @@ class MainActivity : Activity() {
         touchPad.addView(touchHint, FrameLayout.LayoutParams(-1, -1))
         var downX = 0f
         var downY = 0f
+        var lastTouchX = 0f
+        var lastTouchY = 0f
         var moved = false
         touchPad.setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
-                    downX = event.x; downY = event.y; moved = false
-                    sendTouchSlideEvent(view, event, 0)
+                    downX = event.x; downY = event.y
+                    lastTouchX = event.x; lastTouchY = event.y
+                    moved = false
+                    sendTouchMouseEvent(0f, 0f, 0)
                     true
                 }
                 android.view.MotionEvent.ACTION_MOVE -> {
-                    val dx = event.x - downX
-                    val dy = event.y - downY
-                    if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > dp(1)) moved = true
-                    if (moved) {
-                        // EShare's original touchpad uses SLIDEEVENT with scaled screen coordinates,
-                        // not AIRMOUSEEVNET relative deltas.
-                        sendTouchSlideEvent(view, event, 2)
+                    val totalDx = event.x - downX
+                    val totalDy = event.y - downY
+                    if (kotlin.math.abs(totalDx) + kotlin.math.abs(totalDy) > dp(1)) moved = true
+                    val dx = event.x - lastTouchX
+                    val dy = event.y - lastTouchY
+                    lastTouchX = event.x
+                    lastTouchY = event.y
+                    if (moved && (dx != 0f || dy != 0f)) {
+                        sendTouchMouseEvent(dx, dy, 2, view.width, view.height)
                     }
                     true
                 }
                 android.view.MotionEvent.ACTION_UP -> {
-                    sendTouchSlideEvent(view, event, 1)
+                    sendTouchMouseEvent(0f, 0f, 1)
                     if (!moved) sendKey(23)
                     view.performClick()
                     true
                 }
                 android.view.MotionEvent.ACTION_CANCEL -> {
-                    sendTouchSlideEvent(view, event, 3)
+                    sendTouchMouseEvent(0f, 0f, 1)
                     true
                 }
                 else -> true
@@ -812,8 +818,8 @@ class MainActivity : Activity() {
             val rateY = if (kotlin.math.abs(event.values[0]) < 0.008f) 0f else event.values[0]
             // Increase cursor travel while retaining time-based integration so
             // sensitivity stays consistent across different sensor sample rates.
-            val targetDx = -rateX * dt * 360f
-            val targetDy = -rateY * dt * 360f
+            val targetDx = -rateX * dt * 540f
+            val targetDy = -rateY * dt * 540f
             // Faster response with enough filtering to avoid a jittery pointer.
             smoothedGyroDx += (targetDx - smoothedGyroDx) * 0.65f
             smoothedGyroDy += (targetDy - smoothedGyroDy) * 0.65f
@@ -825,15 +831,23 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun sendTouchSlideEvent(view: View, event: android.view.MotionEvent, action: Int) {
+    private fun sendTouchMouseEvent(
+        dx: Float,
+        dy: Float,
+        action: Int,
+        viewWidth: Int = 1,
+        viewHeight: Int = 1
+    ) {
         if (action == 2) {
             val now = System.currentTimeMillis()
             if (now - lastTouchMoveAt < 55L) return
             lastTouchMoveAt = now
         }
-        val x = (event.x * framebufferWidth / view.width.coerceAtLeast(1)).coerceIn(0f, framebufferWidth)
-        val y = (event.y * framebufferHeight / view.height.coerceAtLeast(1)).coerceIn(0f, framebufferHeight)
-        val packet = "SLIDEEVENT\r\n0\r\n$action\r\n[={$x,$y}]\r\n\r\n"
+        // AIRMOUSEEVNET is EShare's relative pointer protocol. SLIDEEVENT
+        // injects touch input and does not drive the visible remote mouse cursor.
+        val scaledX = dx * framebufferWidth / viewWidth.coerceAtLeast(1)
+        val scaledY = dy * framebufferHeight / viewHeight.coerceAtLeast(1)
+        val packet = "AIRMOUSEEVNET\\r\\n$scaledX\\r\\n$scaledY\\r\\n$action\\r\\n\\r\\n"
         airMouseIo.execute {
             try {
                 writePointerPacket(packet)
