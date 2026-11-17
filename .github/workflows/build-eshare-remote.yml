@@ -38,12 +38,18 @@ jobs:
           source version.properties
           echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
-      - name: Build debug APK
+      - name: Build phone remote and TV receiver APKs
         working-directory: android-eshare-remote
-        run: gradle assembleDebug
-      - name: Upload APK
+        run: gradle :app:assembleDebug :tv-receiver:assembleDebug
+      - name: Upload phone remote APK
         uses: actions/upload-artifact@v4
         with:
           name: wasla-eshare-remote-v${{ steps.app-version.outputs.name }}-code${{ steps.app-version.outputs.code }}
           path: android-eshare-remote/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Upload TV receiver APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasla-tv-receiver-0.1.0
+          path: android-eshare-remote/tv-receiver/build/outputs/apk/debug/tv-receiver-debug.apk
           if-no-files-found: error
