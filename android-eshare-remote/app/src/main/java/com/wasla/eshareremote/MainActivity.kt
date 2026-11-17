@@ -38,6 +38,7 @@ class MainActivity : Activity() {
     private val gestureHandler = Handler(Looper.getMainLooper())
     // Keep pointer traffic off the discovery/key-command executor to avoid input stalls.
     private val airMouseIo = Executors.newSingleThreadExecutor()
+    private val socketReader = Executors.newSingleThreadExecutor()
     private val gyroPositionLock = Any()
     private val socketWriteLock = Any()
     // EShare framebuffer dimensions are queried from GETFBINFO after connecting.
@@ -898,6 +899,7 @@ class MainActivity : Activity() {
         gyroCursorX = framebufferWidth / 2f
         gyroCursorY = framebufferHeight / 2f
         prefs.edit().putString("ip", device.ip).putInt("port", device.port).apply()
+        startSocketReader(socket)
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
     }
 
@@ -1125,6 +1127,39 @@ class MainActivity : Activity() {
         }
     }
 
+    // Read the TCP stream continuously so a remote FIN/reset is detected even
+    // when no remote-control button is being pressed. EShare sends no required
+    // replies to ordinary key/pointer packets, so unsolicited bytes are drained.
+    private fun startSocketReader(socket: Socket) {
+        socketReader.execute {
+            var disconnected = false
+            try {
+                socket.soTimeout = 4000
+                val input = socket.getInputStream()
+                val buffer = ByteArray(1024)
+                while (!socket.isClosed && !Thread.currentThread().isInterrupted) {
+                    try {
+                        val count = input.read(buffer)
+                        if (count < 0) {
+                            disconnected = true
+                            break
+                        }
+                    } catch (_: java.net.SocketTimeoutException) {
+                        // A timeout alone is not a disconnect; the periodic port probe
+                        // checks whether the TV is still reachable on the current network.
+                    }
+                }
+            } catch (_: Exception) {
+                disconnected = !socket.isClosed
+            } finally {
+                if (disconnected && tcp === socket) {
+                    closeConnection()
+                    setStatus("انقطع اتصال التلفاز — جارٍ استعادته تلقائياً...")
+                }
+            }
+        }
+    }
+
     private fun startConnectionMonitor() {
         connectionMonitor.scheduleWithFixedDelay({
             val ip = prefs.getString("ip", null) ?: return@scheduleWithFixedDelay
@@ -1155,6 +1190,7 @@ class MainActivity : Activity() {
         closeConnection()
         io.shutdownNow()
         airMouseIo.shutdownNow()
+        socketReader.shutdownNow()
         super.onDestroy()
     }
 }
