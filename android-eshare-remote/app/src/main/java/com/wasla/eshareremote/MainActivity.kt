@@ -130,6 +130,8 @@ class MainActivity : Activity() {
     private val waslaMonitorStarted = AtomicBoolean(false)
     @Volatile private var lastWaslaPongAt = 0L
     @Volatile private var lastWaslaPingAt = 0L
+    @Volatile private var lastEshareKeepAliveAt = 0L
+    @Volatile private var lastFullDiscoveryAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -264,6 +266,10 @@ class MainActivity : Activity() {
         connectButton = makeButton("اتصال", 40, true).apply {
             textSize = 13f
             setOnClickListener { discoverWaslaThenEShare() }
+            setOnLongClickListener {
+                discoverWaslaThenEShare(interactive = true)
+                true
+            }
         }
         connectionActions.addView(connectButton, LinearLayout.LayoutParams(dp(104), dp(40)).apply {
             marginEnd = dp(7)
@@ -283,6 +289,11 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        connectionIpLabel?.setOnClickListener { showIpEditor() }
+        connectionIpLabel?.setOnLongClickListener {
+            showIpEditor()
+            true
         }
         connectionActions.addView(connectionIpLabel, LinearLayout.LayoutParams(0, dp(38), 1f))
         root.addView(connectionActions, LinearLayout.LayoutParams(-1, dp(46)).apply {
@@ -1345,20 +1356,39 @@ class MainActivity : Activity() {
 
     private fun setStatus(message: String) = runOnUiThread { status.text = message }
 
-    private fun discoverAndConnect(manualIp: String? = null) {
+    private fun discoverAndConnect(manualIp: String? = null, interactive: Boolean = false) {
         if (!reconnecting.compareAndSet(false, true)) return
-        connectButton.isEnabled = false
-        setStatus("جارٍ اكتشاف التلفاز عبر الشبكة...")
+        runOnUiThread {
+            connectButton.isEnabled = false
+            connectionIpLabel?.text = "⌁ جارٍ الاتصال..."
+        }
+        setStatus(if (interactive) "جارٍ البحث عن الشاشات المتاحة..." else "جارٍ استعادة الاتصال بالشاشة...")
         io.execute {
             try {
                 closeConnection()
                 val found = if (manualIp != null) {
                     val savedIp = prefs.getString("ip", null)
                     val port = if (manualIp == savedIp) prefs.getInt("port", 8121) else discoverPort(manualIp)
-                    Device("التلفاز", manualIp, port)
-                } else discover()
+                    Device("شاشة محددة", manualIp, port)
+                } else {
+                    val savedIp = prefs.getString("ip", "") ?: ""
+                    val savedPort = prefs.getInt("port", 8121)
+                    // During recovery, verify the last known receiver first. This avoids
+                    // a full subnet sweep every time Wi-Fi briefly drops a TCP session.
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (!interactive && savedIp.isNotBlank() && isControlPortOpen(savedIp, savedPort)) {
+                        Device(prefs.getString("device_name", "التلفاز") ?: "التلفاز", savedIp, savedPort)
+                    } else if (!interactive && savedIp.isNotBlank() && now - lastFullDiscoveryAt < 25000L) {
+                        // Retry the last receiver directly between full discovery sweeps.
+                        Device(prefs.getString("device_name", "التلفاز") ?: "التلفاز", savedIp, savedPort)
+                    } else {
+                        lastFullDiscoveryAt = now
+                        discover(interactive)
+                    }
+                }
                 connect(found)
             } catch (e: Exception) {
+                runOnUiThread { connectionIpLabel?.text = "⌁ غير متصل" }
                 setStatus("تعذر الاتصال: ${e.message ?: "تحقق من Wi-Fi"}")
             } finally {
                 try { discoveryLock?.let { if (it.isHeld) it.release() } } catch (_: Exception) { }
@@ -1369,7 +1399,51 @@ class MainActivity : Activity() {
         }
     }
 
-    private data class Device(val name: String, val ip: String, val port: Int)
+    private data class Device(val name: String, val ip: String, val port: Int, val latencyMs: Long = -1L)
+
+    private fun showIpEditor() {
+        val editor = EditText(this).apply {
+            setSingleLine(true)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            hint = "مثال: 192.168.1.50"
+            setText(prefs.getString("ip", "") ?: "")
+            selectAll()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("تعديل عنوان IP للشاشة")
+            .setMessage("أدخل عنوان IPv4 للشاشة، ثم اضغط اتصال.")
+            .setView(editor)
+            .setNegativeButton("إلغاء", null)
+            .setNeutralButton("مسح") { _, _ ->
+                prefs.edit().remove("ip").remove("port").apply()
+                connectionIpLabel?.text = "⌁ غير متصل"
+                Toast.makeText(this, "تم مسح عنوان الشاشة المحفوظ", Toast.LENGTH_SHORT).show()
+            }
+            .setPositiveButton("اتصال") { _, _ ->
+                val ip = editor.text.toString().trim()
+                val valid = ip.matches(Regex("^(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}$"))
+                if (!valid) {
+                    Toast.makeText(this, "عنوان IP غير صحيح", Toast.LENGTH_LONG).show()
+                } else {
+                    prefs.edit().putString("ip", ip).apply()
+                    discoverAndConnect(manualIp = ip)
+                }
+            }
+            .show()
+    }
+
+    private fun measureConnectLatency(device: Device): Long {
+        val started = android.os.SystemClock.elapsedRealtime()
+        return try {
+            Socket().use { socket ->
+                socket.tcpNoDelay = true
+                socket.connect(InetSocketAddress(device.ip, device.port), 900)
+            }
+            (android.os.SystemClock.elapsedRealtime() - started).coerceAtLeast(1L)
+        } catch (_: Exception) {
+            Long.MAX_VALUE
+        }
+    }
 
     // Discover UPnP/DIAL receivers even when the EShare application is not open.
     private fun discoverSsdpScreens(): List<Device> {
@@ -1454,7 +1528,7 @@ class MainActivity : Activity() {
     }
 
     @Suppress("DEPRECATION")
-    private fun discover(): Device {
+    private fun discover(interactive: Boolean = false): Device {
         val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         val dhcp = wifi.dhcpInfo
         try {
@@ -1553,7 +1627,10 @@ class MainActivity : Activity() {
         while (System.currentTimeMillis() < deadline && tasks.any { !it.isDone }) Thread.sleep(80)
         pool.shutdownNow()
 
-        val found = devices.values.sortedWith(compareBy<Device> { it.name }.thenBy { it.ip })
+        val found = devices.values
+            .map { device -> device.copy(latencyMs = measureConnectLatency(device)) }
+            .filter { it.latencyMs != Long.MAX_VALUE }
+            .sortedWith(compareBy<Device> { it.latencyMs }.thenBy { it.name }.thenBy { it.ip })
         if (found.isEmpty()) {
             val networkScreens = discoverSsdpScreens()
             if (networkScreens.isNotEmpty()) {
@@ -1562,7 +1639,13 @@ class MainActivity : Activity() {
             }
             throw IllegalStateException("لم يتم العثور على شاشة. تأكد من اتصال الهاتف والشاشة بالشبكة نفسها وأن اكتشاف الأجهزة المحلية مسموح.")
         }
-        val selected = if (found.size == 1) found.first() else chooseDiscoveredDevice(found)
+        val savedIp = prefs.getString("ip", "") ?: ""
+        val selected = when {
+            found.size == 1 -> found.first()
+            interactive -> chooseDiscoveredDevice(found)
+            savedIp.isNotBlank() && found.any { it.ip == savedIp } -> found.first { it.ip == savedIp }
+            else -> found.first()
+        }
         prefs.edit().putString("ip", selected.ip).putInt("port", selected.port).putString("device_name", selected.name).apply()
         runOnUiThread { ipInput.setText(selected.ip) }
         return selected
@@ -1573,7 +1656,8 @@ class MainActivity : Activity() {
         val latch = java.util.concurrent.CountDownLatch(1)
         runOnUiThread {
             val labels = devices.mapIndexed { index, device ->
-                "${index + 1}. ${device.name}\n${device.ip}  •  منفذ ${device.port}"
+                val distance = if (device.latencyMs >= 0L) "استجابة ${device.latencyMs} ms" else "استجابة غير مقاسة"
+                "${index + 1}. ${device.name}\n${device.ip}  •  منفذ ${device.port}  •  $distance"
             }.toTypedArray()
             android.app.AlertDialog.Builder(this)
                 .setTitle("اختر الشاشة المراد الاتصال بها")
@@ -1695,6 +1779,7 @@ class MainActivity : Activity() {
         val socket = Socket()
         socket.connect(InetSocketAddress(device.ip, device.port), 4000)
         socket.tcpNoDelay = true
+        socket.keepAlive = true
         tcp = socket
         output = socket.getOutputStream()
         prefs.edit().putString("ip", device.ip).putInt("port", device.port).apply()
@@ -1727,6 +1812,7 @@ class MainActivity : Activity() {
         } finally {
             try { socket.soTimeout = 0 } catch (_: Exception) { }
         }
+        lastEshareKeepAliveAt = android.os.SystemClock.elapsedRealtime()
         startSocketReader(socket)
         runOnUiThread { connectionIpLabel?.text = "⌁  ${device.ip}" }
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
@@ -1910,9 +1996,9 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private data class WaslaReceiverCandidate(val deviceId: String, val ip: String, val port: Int)
+    private data class WaslaReceiverCandidate(val deviceId: String, val ip: String, val port: Int, val latencyMs: Long)
 
-    private fun discoverWaslaThenEShare() {
+    private fun discoverWaslaThenEShare(interactive: Boolean = false) {
         if (!reconnecting.compareAndSet(false, true)) return
         connectButton.isEnabled = false
         setStatus("جارٍ البحث عن مستقبلات وصلة والشاشات المتوافقة...")
@@ -1939,7 +2025,7 @@ class MainActivity : Activity() {
                                 val ip = packet.address.hostAddress.orEmpty()
                                 val port = fields[2].toIntOrNull()
                                 if (id.isNotBlank() && ip.isNotBlank() && port == 38471) {
-                                    found["$id@$ip"] = WaslaReceiverCandidate(id, ip, port)
+                                    found["$id@$ip"] = WaslaReceiverCandidate(id, ip, port, measureConnectLatency(Device("وصلة TV", ip, port)))
                                 }
                             }
                         } catch (_: SocketTimeoutException) { }
@@ -1950,17 +2036,19 @@ class MainActivity : Activity() {
                 reconnecting.set(false)
                 connectButton.isEnabled = true
                 if (found.isNotEmpty()) {
-                    showWaslaReceiverChoices(found.values.toList())
+                    showWaslaReceiverChoices(found.values.sortedBy { it.latencyMs })
                 } else {
                     setStatus("لم يُعثر على مستقبل وصلة — جارٍ البحث عن شاشات EShare...")
-                    discoverAndConnect()
+                    discoverAndConnect(interactive = interactive)
                 }
             }
         }
     }
 
     private fun showWaslaReceiverChoices(devices: List<WaslaReceiverCandidate>) {
-        val labels = devices.map { "وصلة TV\\n${it.ip}  •  المنفذ ${it.port}" }.toTypedArray()
+        val labels = devices.mapIndexed { index, device ->
+            "${index + 1}. وصلة TV\\n${device.ip}  •  ${device.latencyMs} ms"
+        }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("اختر مستقبل وصلة")
             .setItems(labels) { _, which ->
@@ -2399,8 +2487,27 @@ class MainActivity : Activity() {
         // Network callbacks handle route changes; this loop retries discovery when disconnected.
         connectionMonitor.scheduleWithFixedDelay({
             val socket = tcp
-            if ((socket == null || socket.isClosed || !socket.isConnected) && !reconnecting.get()) {
-                setStatus("الاتصال غير نشط — جارٍ إعادة اكتشاف الشاشة تلقائياً...")
+            if (socket != null && !socket.isClosed && socket.isConnected) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastEshareKeepAliveAt >= 20000L) {
+                    try {
+                        synchronized(socketWriteLock) {
+                            if (tcp === socket && !socket.isClosed) {
+                                val stream = output ?: throw IllegalStateException("قناة التحكم مغلقة")
+                                // GETFBINFO is a harmless EShare request already used during
+                                // handshake; periodic requests prevent idle-session expiry.
+                                stream.write("GETFBINFO\r\n1\r\n\r\n".toByteArray(Charsets.UTF_8))
+                                stream.flush()
+                                lastEshareKeepAliveAt = now
+                            }
+                        }
+                    } catch (_: Exception) {
+                        closeConnection()
+                        setStatus("فُقدت جلسة التحكم — جارٍ استعادتها...")
+                    }
+                }
+            } else if (!reconnecting.get()) {
+                setStatus("الاتصال غير نشط — جارٍ استعادة الشاشة تلقائياً...")
                 discoverAndConnect()
             }
         }, 5, 5, TimeUnit.SECONDS)
