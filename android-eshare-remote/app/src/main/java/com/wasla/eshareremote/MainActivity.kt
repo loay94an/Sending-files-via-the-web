@@ -1170,9 +1170,9 @@ class MainActivity : Activity() {
                     closeConnection()
                     setStatus("انقطع الاتصال بالتلفاز — جارٍ البحث عنه مجدداً...")
                 }
-                if (!reconnecting.get()) discoverAndConnect(ip)
+                if (!reconnecting.get()) discoverAndConnect()
             } else if (tcp == null || tcp?.isClosed != false) {
-                if (!reconnecting.get()) discoverAndConnect(ip)
+                if (!reconnecting.get()) discoverAndConnect()
             }
         }, 5, 5, TimeUnit.SECONDS)
     }
