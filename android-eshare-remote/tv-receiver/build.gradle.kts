@@ -21,4 +21,5 @@ android {
 
 dependencies {
     implementation("com.google.zxing:core:3.5.3")
+    implementation("androidx.documentfile:documentfile:1.0.1")
 }
