@@ -876,8 +876,8 @@ class MainActivity : Activity() {
         pendingTouchDx = 0f
         pendingTouchDy = 0f
         if (moveDx == 0f && moveDy == 0f) return
-        val scaledX = moveDx * framebufferWidth * 0.10f / viewWidth.coerceAtLeast(1)
-        val scaledY = moveDy * framebufferHeight * 0.10f / viewHeight.coerceAtLeast(1)
+        val scaledX = moveDx * framebufferWidth * 1.0f / viewWidth.coerceAtLeast(1)
+        val scaledY = moveDy * framebufferHeight * 1.0f / viewHeight.coerceAtLeast(1)
         gyroCursorX = (gyroCursorX + scaledX).coerceIn(0f, framebufferWidth)
         gyroCursorY = (gyroCursorY + scaledY).coerceIn(0f, framebufferHeight)
         sendGyroPosition(gyroCursorX, gyroCursorY)
