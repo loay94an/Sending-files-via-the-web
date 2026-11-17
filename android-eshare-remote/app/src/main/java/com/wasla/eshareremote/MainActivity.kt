@@ -687,7 +687,11 @@ class MainActivity : Activity() {
         io.execute {
             try {
                 closeConnection()
-                val found = if (manualIp != null) Device("التلفاز", manualIp, discoverPort(manualIp)) else discover()
+                val found = if (manualIp != null) {
+                    val savedIp = prefs.getString("ip", null)
+                    val port = if (manualIp == savedIp) prefs.getInt("port", 8121) else discoverPort(manualIp)
+                    Device("التلفاز", manualIp, port)
+                } else discover()
                 connect(found)
             } catch (e: Exception) {
                 setStatus("تعذر الاتصال: ${e.message ?: "تحقق من Wi-Fi"}")
