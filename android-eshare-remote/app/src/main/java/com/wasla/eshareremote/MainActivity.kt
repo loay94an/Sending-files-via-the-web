@@ -820,8 +820,8 @@ class MainActivity : Activity() {
             val rateY = if (kotlin.math.abs(event.values[0]) < 0.008f) 0f else event.values[0]
             // Increase cursor travel while retaining time-based integration so
             // sensitivity stays consistent across different sensor sample rates.
-            val targetDx = -rateX * dt * 594f
-            val targetDy = -rateY * dt * 594f
+            val targetDx = -rateX * dt * 624f
+            val targetDy = -rateY * dt * 624f
             // Faster response with enough filtering to avoid a jittery pointer.
             smoothedGyroDx += (targetDx - smoothedGyroDx) * 0.65f
             smoothedGyroDy += (targetDy - smoothedGyroDy) * 0.65f
@@ -862,8 +862,8 @@ class MainActivity : Activity() {
         // AIRMOUSEEVNET is EShare's relative pointer protocol. Accumulating
         // motion at a 60 Hz cadence makes the touchpad smoother without losing
         // small movements between transmitted packets.
-        val scaledX = moveDx * framebufferWidth / viewWidth.coerceAtLeast(1)
-        val scaledY = moveDy * framebufferHeight / viewHeight.coerceAtLeast(1)
+        val scaledX = moveDx * framebufferWidth * 0.5f / viewWidth.coerceAtLeast(1)
+        val scaledY = moveDy * framebufferHeight * 0.5f / viewHeight.coerceAtLeast(1)
         val packet = "AIRMOUSEEVNET\r\n$scaledX\r\n$scaledY\r\n$action\r\n\r\n"
         airMouseIo.execute {
             try {
