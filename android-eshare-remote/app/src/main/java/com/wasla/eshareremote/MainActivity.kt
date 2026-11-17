@@ -93,6 +93,7 @@ class MainActivity : Activity() {
     private var touchStartAt = 0L
     private var pendingDownloadId: String? = null
     private var pendingDownloadName: String = "wasla-download.bin"
+    private val tvFolderStack = mutableListOf<String>()
     private val relayClient = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
     @Volatile private var relaySocket: WebSocket? = null
     private val relayConnecting = AtomicBoolean(false)
@@ -1115,7 +1116,9 @@ class MainActivity : Activity() {
                 val (socket, streams) = openFileChannel()
                 val rows = socket.use {
                     val (input, output) = streams
-                    output.writeUTF("LIST"); output.flush()
+                    val directoryId = tvFolderStack.lastOrNull()
+                    output.writeUTF(if (directoryId == null) "LIST" else "LIST $directoryId")
+                    output.flush()
                     val response = input.readUTF()
                     check(response.startsWith("FILES ")) { response }
                     val json = String(android.util.Base64.decode(response.removePrefix("FILES "), android.util.Base64.NO_WRAP), Charsets.UTF_8)
@@ -1135,30 +1138,86 @@ class MainActivity : Activity() {
                     AlertDialog.Builder(this).setTitle("ملفات التلفاز").setItems(labels) { _, index ->
                         val item = rows.optJSONObject(index) ?: return@setItems
                         if (item.optBoolean("directory")) {
-                            Toast.makeText(this, "استعراض المجلدات الفرعية سيضاف في المرحلة التالية", Toast.LENGTH_LONG).show()
+                            tvFolderStack.add(item.optString("id"))
+                            showTvFiles()
                         } else {
                             val id = item.optString("id")
                             val name = item.optString("name", "wasla-download.bin")
                             AlertDialog.Builder(this).setTitle(name)
-                                .setItems(arrayOf("تنزيل إلى الهاتف", "حذف من التلفاز")) { _, action ->
-                                    if (action == 0) {
-                                        pendingDownloadId = id
-                                        pendingDownloadName = name
-                                        val create = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                                            addCategory(Intent.CATEGORY_OPENABLE)
-                                            type = item.optString("mime", "application/octet-stream")
-                                            putExtra(Intent.EXTRA_TITLE, name)
+                                .setItems(arrayOf("تنزيل إلى الهاتف", "إعادة تسمية", "حذف من التلفاز")) { _, action ->
+                                    when (action) {
+                                        0 -> {
+                                            pendingDownloadId = id
+                                            pendingDownloadName = name
+                                            val create = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                                addCategory(Intent.CATEGORY_OPENABLE)
+                                                type = item.optString("mime", "application/octet-stream")
+                                                putExtra(Intent.EXTRA_TITLE, name)
+                                            }
+                                            startActivityForResult(create, 703)
                                         }
-                                        startActivityForResult(create, 703)
-                                    } else deleteTvFile(id, name)
+                                        1 -> renameTvFile(id, name)
+                                        2 -> deleteTvFile(id, name)
+                                    }
                                 }.setNegativeButton("إلغاء", null).show()
                         }
-                    }.setNegativeButton("إغلاق", null).show()
+                    }.setPositiveButton(if (tvFolderStack.isEmpty()) "إغلاق" else "المجلد السابق") { _, _ ->
+                        if (tvFolderStack.isNotEmpty()) {
+                            tvFolderStack.removeAt(tvFolderStack.lastIndex)
+                            showTvFiles()
+                        }
+                    }
+                    .setNeutralButton("مجلد جديد") { _, _ -> createTvFolder() }
+                    .setNegativeButton("إغلاق", null).show()
                 }
             } catch (e: Exception) {
                 setStatus("تعذر استعراض ملفات التلفاز: ${e.message ?: "تحقق من الاقتران ومجلد المشاركة"}")
             }
         }
+    }
+
+    private fun createTvFolder() {
+        val field = EditText(this).apply { hint = "اسم المجلد"; isSingleLine = true }
+        AlertDialog.Builder(this).setTitle("إنشاء مجلد").setView(field)
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("إنشاء") { _, _ ->
+                val name = field.text.toString().trim()
+                io.execute {
+                    try {
+                        val (socket, streams) = openFileChannel()
+                        val result = socket.use {
+                            val (input, output) = streams
+                            val encoded = android.util.Base64.encodeToString(name.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                            output.writeUTF("MKDIR $encoded"); output.flush()
+                            input.readUTF()
+                        }
+                        setStatus(if (result == "CREATED") "تم إنشاء المجلد" else "تعذر إنشاء المجلد: $result")
+                        if (result == "CREATED") showTvFiles()
+                    } catch (e: Exception) { setStatus("فشل إنشاء المجلد: ${e.message}") }
+                }
+            }.show()
+    }
+
+    private fun renameTvFile(id: String, oldName: String) {
+        val field = EditText(this).apply { setText(oldName); isSingleLine = true }
+        AlertDialog.Builder(this).setTitle("إعادة تسمية").setView(field)
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("حفظ") { _, _ ->
+                val name = field.text.toString().trim()
+                io.execute {
+                    try {
+                        val (socket, streams) = openFileChannel()
+                        val result = socket.use {
+                            val (input, output) = streams
+                            val encodedName = android.util.Base64.encodeToString(name.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                            output.writeUTF("RENAME $id $encodedName"); output.flush()
+                            input.readUTF()
+                        }
+                        setStatus(if (result == "RENAMED") "تمت إعادة التسمية" else "تعذرت إعادة التسمية: $result")
+                        if (result == "RENAMED") showTvFiles()
+                    } catch (e: Exception) { setStatus("فشلت إعادة التسمية: ${e.message}") }
+                }
+            }.show()
     }
 
     private fun deleteTvFile(id: String, name: String) {
