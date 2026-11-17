@@ -1126,10 +1126,6 @@ class MainActivity : Activity() {
                 }
                 runOnUiThread {
                     if (isFinishing) return@runOnUiThread
-                    if (rows.length() == 0) {
-                        AlertDialog.Builder(this).setTitle("ملفات التلفاز").setMessage("المجلد المشترك فارغ").setPositiveButton("حسنًا", null).show()
-                        return@runOnUiThread
-                    }
                     val labels = Array(rows.length()) { i ->
                         val item = rows.getJSONObject(i)
                         val size = item.optLong("size", 0L)
