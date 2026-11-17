@@ -14,6 +14,7 @@ import android.net.wifi.WifiManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -1484,7 +1485,15 @@ class MainActivity : Activity() {
             }
         }
         try {
-            manager.registerDefaultNetworkCallback(callback)
+            if (android.os.Build.VERSION.SDK_INT >= 24) {
+                manager.registerDefaultNetworkCallback(callback)
+            } else {
+                val request = NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build()
+                manager.registerNetworkCallback(request, callback)
+            }
             networkCallback = callback
             lastDefaultNetwork = manager.activeNetwork
         } catch (e: Exception) {
