@@ -13,6 +13,8 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.graphics.Typeface
 import android.view.Gravity
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.widget.*
 import java.io.OutputStream
@@ -24,9 +26,16 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
+    private val connectionMonitor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
+    private val reconnecting = AtomicBoolean(false)
+    private val connectionLock = Any()
+    private val gestureHandler = Handler(Looper.getMainLooper())
     // Keep pointer traffic off the discovery/key-command executor to avoid input stalls.
     private val airMouseIo = Executors.newSingleThreadExecutor()
     private val gyroPositionLock = Any()
@@ -53,6 +62,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
+    private lateinit var textInput: EditText
     private val prefs by lazy { getSharedPreferences("remote", Context.MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -72,6 +82,7 @@ class MainActivity : Activity() {
         val saved = prefs.getString("ip", "") ?: ""
         ipInput.setText(saved)
         discoverAndConnect()
+        startConnectionMonitor()
     }
 
     private fun buildUi() {
@@ -161,6 +172,50 @@ class MainActivity : Activity() {
         header.addView(power, LinearLayout.LayoutParams(dp(72), dp(58)))
         root.addView(header, lp(-1, dp(72)))
 
+        // Phone keyboard input sits above the sharing and file-transfer shortcuts.
+        val textEntry = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            background = surface(0xff0c192d.toInt(), 17, 0xff263f61.toInt())
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+        }
+        textInput = EditText(this).apply {
+            hint = "اكتب نصاً لإرساله إلى التلفاز"
+            textSize = 14f
+            setSingleLine(true)
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setTextColor(white)
+            setHintTextColor(muted)
+            setPadding(dp(9), 0, dp(9), 0)
+            background = android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT)
+        }
+        textEntry.addView(textInput, LinearLayout.LayoutParams(0, dp(44), 1f))
+        val sendTextButton = makeButton("إرسال", 42, true).apply {
+            textSize = 13f
+            setOnClickListener {
+                val value = textInput.text.toString()
+                if (value.isNotBlank()) {
+                    sendText(value)
+                    textInput.text.clear()
+                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+                    imm.hideSoftInputFromWindow(textInput.windowToken, 0)
+                }
+            }
+        }
+        textEntry.addView(sendTextButton, LinearLayout.LayoutParams(dp(76), dp(42)))
+        textInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
+                sendTextButton.performClick()
+                true
+            } else false
+        }
+        root.addView(textEntry, LinearLayout.LayoutParams(-1, dp(52)).apply {
+            topMargin = dp(7); bottomMargin = dp(3)
+        })
+
         val shortcuts = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -223,12 +278,22 @@ class MainActivity : Activity() {
         var lastTouchX = 0f
         var lastTouchY = 0f
         var moved = false
+        var longPressTriggered = false
+        val longPressStart = Runnable {
+            if (!moved && !longPressTriggered && !airMouseEnabled) {
+                longPressTriggered = true
+                sendPointerHold(true)
+            }
+        }
         touchPad.setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
                     downX = event.x; downY = event.y
                     lastTouchX = event.x; lastTouchY = event.y
                     moved = false
+                    longPressTriggered = false
+                    gestureHandler.removeCallbacks(longPressStart)
+                    if (!airMouseEnabled) gestureHandler.postDelayed(longPressStart, 620L)
                     // Do not send synthetic mouse-down/up packets here: on some
                     // EShare builds those reset the relative pointer to screen center.
                     true
@@ -238,7 +303,10 @@ class MainActivity : Activity() {
                     val totalDy = event.y - downY
                     // Ignore tiny finger jitter so a tap remains a click.
                     val moveThreshold = if (airMouseEnabled) dp(18) else dp(6)
-                    if (kotlin.math.abs(totalDx) + kotlin.math.abs(totalDy) > moveThreshold) moved = true
+                    if (kotlin.math.abs(totalDx) + kotlin.math.abs(totalDy) > moveThreshold) {
+                        moved = true
+                        gestureHandler.removeCallbacks(longPressStart)
+                    }
                     val dx = event.x - lastTouchX
                     val dy = event.y - lastTouchY
                     lastTouchX = event.x
@@ -249,6 +317,12 @@ class MainActivity : Activity() {
                     true
                 }
                 android.view.MotionEvent.ACTION_UP -> {
+                    gestureHandler.removeCallbacks(longPressStart)
+                    if (longPressTriggered) {
+                        sendPointerHold(false)
+                        view.performClick()
+                        return@setOnTouchListener true
+                    }
                     if (!airMouseEnabled) sendTouchMouseEvent(0f, 0f, 1, view.width, view.height)
                     val totalDx = event.x - downX
                     val totalDy = event.y - downY
@@ -271,7 +345,11 @@ class MainActivity : Activity() {
                     view.performClick()
                     true
                 }
-                android.view.MotionEvent.ACTION_CANCEL -> true
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    gestureHandler.removeCallbacks(longPressStart)
+                    if (longPressTriggered) sendPointerHold(false)
+                    true
+                }
                 else -> true
             }
         }
@@ -603,6 +681,7 @@ class MainActivity : Activity() {
     private fun setStatus(message: String) = runOnUiThread { status.text = message }
 
     private fun discoverAndConnect(manualIp: String? = null) {
+        if (!reconnecting.compareAndSet(false, true)) return
         connectButton.isEnabled = false
         setStatus("جارٍ اكتشاف التلفاز عبر الشبكة...")
         io.execute {
@@ -616,6 +695,7 @@ class MainActivity : Activity() {
                 try { discoveryLock?.let { if (it.isHeld) it.release() } } catch (_: Exception) { }
                 discoveryLock = null
                 runOnUiThread { connectButton.isEnabled = true }
+                reconnecting.set(false)
             }
         }
     }
@@ -782,7 +862,8 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun connect(device: Device) {
+    private fun connect(device: Device) = synchronized(connectionLock) {
+        closeConnection()
         val socket = Socket()
         socket.connect(InetSocketAddress(device.ip, device.port), 4000)
         tcp = socket
@@ -940,37 +1021,120 @@ class MainActivity : Activity() {
     }
 
     private fun writePointerPacket(packet: String) {
-        if (tcp?.isConnected != true || tcp?.isClosed != false) {
-            val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
-            connect(Device("التلفاز", ip, discoverPort(ip)))
-        }
-        synchronized(socketWriteLock) {
-            output?.write(packet.toByteArray(Charsets.UTF_8))
-            output?.flush()
+        writePacketWithReconnect(packet)
+    }
+
+    private fun writePacketWithReconnect(packet: String) {
+        synchronized(connectionLock) {
+            fun writeOnce() {
+                if (tcp?.isConnected != true || tcp?.isClosed != false || tcp?.isOutputShutdown == true) {
+                    val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
+                    connect(Device("التلفاز", ip, discoverPort(ip)))
+                }
+                synchronized(socketWriteLock) {
+                    val stream = output ?: throw IllegalStateException("جلسة التحكم غير جاهزة")
+                    stream.write(packet.toByteArray(Charsets.UTF_8))
+                    stream.flush()
+                }
+            }
+            try {
+                writeOnce()
+            } catch (first: Exception) {
+                closeConnection()
+                try {
+                    val ip = prefs.getString("ip", null) ?: throw first
+                    connect(Device("التلفاز", ip, discoverPort(ip)))
+                    writeOnce()
+                    setStatus("أُعيد الاتصال بالتلفاز تلقائياً")
+                } catch (second: Exception) {
+                    closeConnection()
+                    setStatus("انقطع الاتصال — جارٍ إعادة المحاولة: ${second.message ?: "تحقق من الشبكة"}")
+                    throw second
+                }
+            }
         }
     }
 
     private fun sendKey(key: Int) {
         io.execute {
             try {
-                if (tcp?.isConnected != true || tcp?.isClosed != false) {
-                    val ip = prefs.getString("ip", null) ?: throw IllegalStateException("ابحث عن التلفاز أولاً")
-                    connect(Device("التلفاز", ip, discoverPort(ip)))
-                }
-                // Pointer and key packets share one TCP stream. Serialize every write
-                // so a key event can never split an AIRMOUSEEVNET packet.
-                synchronized(socketWriteLock) {
-                    output?.write("KEYEVENT\r\n$key\r\n\r\n".toByteArray(Charsets.UTF_8))
-                    output?.flush()
-                }
+                writePacketWithReconnect("KEYEVENT\r\n$key\r\n\r\n")
             } catch (e: Exception) {
-                closeConnection()
-                setStatus("انقطع الاتصال: ${e.message ?: "أعد البحث"}")
+                setStatus("تعذر إرسال الأمر: ${e.message ?: "الاتصال غير متاح"}")
             }
         }
     }
 
-    private fun closeConnection() {
+    private fun sendPointerHold(pressed: Boolean) {
+        val x = gyroCursorX
+        val y = gyroCursorY
+        val action = if (pressed) 0 else 1
+        airMouseIo.execute {
+            try {
+                writePointerPacket("GYROSCOPEEVENT\r\n$x\r\n$y\r\n$action\r\n\r\n")
+            } catch (_: Exception) { }
+        }
+    }
+
+    // EShare's KEYEVENT channel carries Android key codes, not arbitrary Unicode.
+    // Arabic key positions are mapped to the TV's active Arabic keyboard layout.
+    private fun sendText(value: String) {
+        val arabicKeys = mapOf(
+            'ض' to 45, 'ص' to 51, 'ث' to 33, 'ق' to 46, 'ف' to 48, 'غ' to 53,
+            'ع' to 49, 'ه' to 37, 'خ' to 43, 'ح' to 44, 'ج' to 71, 'د' to 72,
+            'ش' to 29, 'س' to 47, 'ي' to 32, 'ب' to 34, 'ل' to 35, 'ا' to 36,
+            'ت' to 38, 'ن' to 39, 'م' to 40, 'ك' to 74, 'ط' to 75, 'ئ' to 54,
+            'ء' to 52, 'ؤ' to 31, 'ر' to 50, 'ى' to 42, 'ة' to 41,
+            'و' to 55, 'ز' to 56, 'ظ' to 76
+        )
+        val keyCodes = mutableListOf<Int>()
+        for (ch in value) {
+            val code = when {
+                ch in 'a'..'z' -> 29 + (ch - 'a')
+                ch in 'A'..'Z' -> 29 + (ch.lowercaseChar() - 'a')
+                ch in '0'..'9' -> intArrayOf(7,8,9,10,11,12,13,14,15,16)[ch - '0']
+                ch == ' ' -> 62
+                ch == '\n' || ch == '\r' -> 66
+                ch == '.' -> 56
+                ch == ',' || ch == '،' -> 55
+                ch == '-' -> 69
+                ch == '/' -> 76
+                ch == ':' || ch == ';' -> 74
+                else -> arabicKeys[ch]
+            }
+            if (code != null && code > 0) keyCodes.add(code)
+        }
+        if (keyCodes.isEmpty()) {
+            setStatus("لا توجد أحرف مدعومة في النص المدخل")
+            return
+        }
+        io.execute {
+            try {
+                for (code in keyCodes) writePacketWithReconnect("KEYEVENT\r\n$code\r\n\r\n")
+                setStatus("تم إرسال النص إلى التلفاز")
+            } catch (_: Exception) {
+                setStatus("توقف إرسال النص بسبب انقطاع الاتصال")
+            }
+        }
+    }
+
+    private fun startConnectionMonitor() {
+        connectionMonitor.scheduleWithFixedDelay({
+            val ip = prefs.getString("ip", null) ?: return@scheduleWithFixedDelay
+            val reachable = isControlPortOpen(ip, 8121)
+            if (!reachable) {
+                if (tcp != null) {
+                    closeConnection()
+                    setStatus("انقطع الاتصال بالتلفاز — جارٍ البحث عنه مجدداً...")
+                }
+                if (!reconnecting.get()) discoverAndConnect(ip)
+            } else if (tcp == null || tcp?.isClosed != false) {
+                if (!reconnecting.get()) discoverAndConnect(ip)
+            }
+        }, 5, 5, TimeUnit.SECONDS)
+    }
+
+    private fun closeConnection() = synchronized(connectionLock) {
         try { output?.close() } catch (_: Exception) { }
         try { tcp?.close() } catch (_: Exception) { }
         output = null
@@ -978,6 +1142,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        gestureHandler.removeCallbacksAndMessages(null)
+        connectionMonitor.shutdownNow()
         closeConnection()
         io.shutdownNow()
         airMouseIo.shutdownNow()
