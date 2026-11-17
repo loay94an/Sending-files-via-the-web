@@ -50,7 +50,10 @@ class MainActivity : Activity() {
         val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val active = manager.activeNetwork
         val caps = active?.let { manager.getNetworkCapabilities(it) }
-        val hasUsableNetwork = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        val hasUsableNetwork = caps?.let {
+            it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        } == true
         closeConnection()
         if (hasUsableNetwork && !reconnecting.get()) {
             setStatus("تغيّرت الشبكة — جارٍ اكتشاف الشاشة وإعادة الاتصال...")
@@ -938,6 +941,82 @@ class MainActivity : Activity() {
 
     private data class Device(val name: String, val ip: String, val port: Int)
 
+    // Discover UPnP/DIAL receivers even when the EShare application is not open.
+    private fun discoverSsdpScreens(): List<Device> {
+        val candidates = java.util.concurrent.ConcurrentHashMap<String, Device>()
+        val targets = listOf(
+            "urn:schemas-upnp-org:device:MediaRenderer:1",
+            "urn:dial-multiscreen-org:service:dial:1",
+            "ssdp:all"
+        )
+        try {
+            DatagramSocket().use { udp ->
+                udp.soTimeout = 350
+                for (target in targets) {
+                    val request = (
+                        "M-SEARCH * HTTP/1.1\r\n" +
+                        "HOST: 239.255.255.250:1900\r\n" +
+                        "MAN: " + "\"ssdp:discover\"" + "\r\n" +
+                        "MX: 1\r\nST: $target\r\n\r\n"
+                    ).toByteArray(Charsets.US_ASCII)
+                    try {
+                        udp.send(DatagramPacket(request, request.size,
+                            InetAddress.getByName("239.255.255.250"), 1900))
+                    } catch (_: Exception) { }
+                }
+                val deadline = System.currentTimeMillis() + 2600
+                val buffer = ByteArray(4096)
+                while (System.currentTimeMillis() < deadline) {
+                    try {
+                        val packet = DatagramPacket(buffer, buffer.size)
+                        udp.receive(packet)
+                        val response = String(packet.data, 0, packet.length, Charsets.ISO_8859_1)
+                        val st = response.lineSequence().firstOrNull { it.startsWith("ST:", true) }
+                            ?.substringAfter(":")?.trim().orEmpty()
+                        val server = response.lineSequence().firstOrNull { it.startsWith("SERVER:", true) }
+                            ?.substringAfter(":")?.trim().orEmpty()
+                        val usn = response.lineSequence().firstOrNull { it.startsWith("USN:", true) }
+                            ?.substringAfter(":")?.trim().orEmpty()
+                        val renderer = st.contains("MediaRenderer", true) ||
+                            st.contains("dial-multiscreen", true) ||
+                            server.contains("Roku", true) ||
+                            server.contains("Samsung", true) ||
+                            server.contains("Android", true) ||
+                            server.contains("LG", true)
+                        if (!renderer) continue
+                        val ip = packet.address.hostAddress ?: continue
+                        val name = when {
+                            server.contains("Roku", true) -> "Roku TV"
+                            server.contains("Samsung", true) -> "Samsung TV"
+                            server.contains("LG", true) -> "LG TV"
+                            server.contains("Android", true) -> "Android TV"
+                            st.contains("dial-multiscreen", true) -> "مستقبل بث"
+                            else -> "شاشة على الشبكة"
+                        }
+                        candidates["$ip:$usn"] = Device(name, ip, 8121)
+                    } catch (_: java.net.SocketTimeoutException) { }
+                }
+            }
+        } catch (_: Exception) { }
+        return candidates.values.distinctBy { it.ip }.sortedBy { it.name }
+    }
+
+    private fun showScreensWithoutEShare(devices: List<Device>) {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        runOnUiThread {
+            val details = devices.joinToString("\n\n") {
+                "• \${it.name}\n\${it.ip}\nموجودة على الشبكة — خدمة EShare غير ظاهرة"
+            }
+            android.app.AlertDialog.Builder(this)
+                .setTitle("تم اكتشاف شاشة على الشبكة")
+                .setMessage(details + "\n\nتم التعرف على وجود الشاشة دون تشغيل EShare، لكن التحكم بها يحتاج خدمة تحكم متوافقة.")
+                .setPositiveButton("حسناً") { _, _ -> latch.countDown() }
+                .setOnCancelListener { latch.countDown() }
+                .show()
+        }
+        latch.await(30, TimeUnit.SECONDS)
+    }
+
     private fun packet(): ByteArray {
         val name = "FindECloudBox".toByteArray(Charsets.UTF_8)
         return ByteBuffer.allocate(50).order(ByteOrder.BIG_ENDIAN)
@@ -1046,7 +1125,12 @@ class MainActivity : Activity() {
 
         val found = devices.values.sortedWith(compareBy<Device> { it.name }.thenBy { it.ip })
         if (found.isEmpty()) {
-            throw IllegalStateException("لم يتم العثور على شاشة EShare. تأكد أن الهاتف والشاشة على الشبكة نفسها وأن عزل الأجهزة غير مفعّل في الراوتر.")
+            val networkScreens = discoverSsdpScreens()
+            if (networkScreens.isNotEmpty()) {
+                showScreensWithoutEShare(networkScreens)
+                throw IllegalStateException("تم اكتشاف الشاشة على الشبكة، لكن خدمة التحكم EShare غير متاحة.")
+            }
+            throw IllegalStateException("لم يتم العثور على شاشة. تأكد من اتصال الهاتف والشاشة بالشبكة نفسها وأن اكتشاف الأجهزة المحلية مسموح.")
         }
         val selected = if (found.size == 1) found.first() else chooseDiscoveredDevice(found)
         prefs.edit().putString("ip", selected.ip).putInt("port", selected.port).putString("device_name", selected.name).apply()
@@ -1488,9 +1572,9 @@ class MainActivity : Activity() {
             if (android.os.Build.VERSION.SDK_INT >= 24) {
                 manager.registerDefaultNetworkCallback(callback)
             } else {
+                // Local-only Wi-Fi still supports TV discovery without internet.
                 val request = NetworkRequest.Builder()
                     .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                     .build()
                 manager.registerNetworkCallback(request, callback)
             }
