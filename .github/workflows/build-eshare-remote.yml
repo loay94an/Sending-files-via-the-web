@@ -1,0 +1,49 @@
+name: Build Wasla EShare Remote APK
+
+on:
+  push:
+    branches: [feat/eshare-arabic-remote, fix/eshare-hotspot-airmouse, fix/airmouse-protocol-scaling, fix/pointer-click-protocol]
+    paths:
+      - "android-eshare-remote/**"
+      - ".github/workflows/build-eshare-remote.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "android-eshare-remote/**"
+      - ".github/workflows/build-eshare-remote.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Read app version
+        id: app-version
+        working-directory: android-eshare-remote
+        run: |
+          source version.properties
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+      - name: Build debug APK
+        working-directory: android-eshare-remote
+        run: gradle assembleDebug
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasla-eshare-remote-v${{ steps.app-version.outputs.name }}-code${{ steps.app-version.outputs.code }}
+          path: android-eshare-remote/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
