@@ -5,6 +5,7 @@ import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.media.AudioManager
 import android.os.Bundle
+import android.os.Build
 import android.util.Base64
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -24,6 +25,7 @@ class WaslaAccessibilityService : AccessibilityService() {
     }
 
     fun tap(x: Float, y: Float): Boolean {
+        if (Build.VERSION.SDK_INT < 24) return false
         val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 90))
@@ -32,6 +34,7 @@ class WaslaAccessibilityService : AccessibilityService() {
     }
 
     fun longPress(x: Float, y: Float, duration: Long): Boolean {
+        if (Build.VERSION.SDK_INT < 24) return false
         val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, duration.coerceIn(500, 2000)))
@@ -40,6 +43,7 @@ class WaslaAccessibilityService : AccessibilityService() {
     }
 
     fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, duration: Long): Boolean {
+        if (Build.VERSION.SDK_INT < 24) return false
         val path = Path().apply { moveTo(x1, y1); lineTo(x2, y2) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, duration.coerceIn(80, 2000)))
@@ -61,7 +65,7 @@ class WaslaAccessibilityService : AccessibilityService() {
         "QUICK_SETTINGS" -> performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
         "VOLUME_UP" -> adjustVolume(AudioManager.ADJUST_RAISE)
         "VOLUME_DOWN" -> adjustVolume(AudioManager.ADJUST_LOWER)
-        "MUTE" -> adjustVolume(AudioManager.ADJUST_TOGGLE_MUTE)
+        "MUTE" -> if (Build.VERSION.SDK_INT >= 23) adjustVolume(AudioManager.ADJUST_TOGGLE_MUTE) else false
         else -> false
     }
 
