@@ -699,7 +699,7 @@ class MainActivity : Activity() {
         }
         val relayInput = EditText(this).apply {
             hint = "https://your-worker.workers.dev"
-            singleLine = true
+            isSingleLine = true
             textSize = 14f
             setText(prefs.getString("relay_base_url", "") ?: "")
             inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
