@@ -1770,6 +1770,12 @@ class MainActivity : Activity() {
                             val line = try { reader.readLine() } catch (_: SocketTimeoutException) { continue } ?: break
                             if (line == "PONG") {
                                 lastWaslaPongAt = android.os.SystemClock.elapsedRealtime()
+                            } else if (line == "ACTION_UNAVAILABLE") {
+                                setStatus("الاتصال قائم، لكن يجب تفعيل خدمة وصلة من إعدادات إمكانية الوصول على التلفاز")
+                            } else if (line == "BAD_ACTION") {
+                                setStatus("رفض مستقبل وصلة الأمر؛ تحقق من توافق إصدار التطبيقين")
+                            } else if (line == "ACTION_OK") {
+                                setStatus("تم تنفيذ الأمر على التلفاز")
                             } else if (line.startsWith("WASLA-TV/1")) {
                                 setStatus("اتصال وصلة نشط: $ip")
                             }
