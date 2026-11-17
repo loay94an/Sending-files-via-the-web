@@ -201,7 +201,8 @@ class WaslaLocalServerService : Service() {
             }
             output.writeUTF("OK WASLA-FILES/1"); output.flush()
             try {
-                when (val command = input.readUTF()) {
+                val command = input.readUTF()
+                when {
                     command == "LIST" || command.startsWith("LIST ") -> {
                         val root = selectedFolder()
                         val requested = command.removePrefix("LIST").trim()
@@ -320,7 +321,7 @@ class WaslaLocalServerService : Service() {
                                     val name = String(Base64.decode(parts[2], Base64.NO_WRAP), Charsets.UTF_8)
                                     val root = selectedFolder()
                                     val parent = if (parts[1] == "ROOT") root else root?.let { findSharedDocument(uri, it) }
-                                    val valid = name.isNotBlank() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\\\') && name.length <= 120
+                                    val valid = name.isNotBlank() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\') && name.length <= 120
                                     output.writeUTF(when {
                                         parent == null || !parent.isDirectory || !parent.canWrite() -> "ERROR FOLDER_NOT_WRITABLE"
                                         !valid -> "ERROR INVALID_NAME"
