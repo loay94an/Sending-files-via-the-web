@@ -192,7 +192,7 @@ class WaslaLocalServerService : Service() {
 
     private fun handleFileClient(socket: java.net.Socket) {
         socket.use { client ->
-            client.soTimeout = 30_000
+            client.soTimeout = 120_000
             val input = DataInputStream(client.getInputStream())
             val output = DataOutputStream(client.getOutputStream())
             val hello = try { input.readUTF() } catch (_: Exception) { return }
@@ -214,7 +214,7 @@ class WaslaLocalServerService : Service() {
                         else if (current == null || !current.isDirectory || !current.canRead()) output.writeUTF("ERROR DIRECTORY_NOT_FOUND")
                         else {
                             val rows = JSONArray()
-                            current.listFiles().take(300).forEach { doc ->
+                            current.listFiles().take(150).forEach { doc ->
                                 rows.put(JSONObject().apply {
                                     put("id", Base64.encodeToString(doc.uri.toString().toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
                                     put("name", doc.name ?: "ملف")
