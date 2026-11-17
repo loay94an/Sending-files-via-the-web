@@ -140,6 +140,23 @@ class TvReceiverActivity : Activity() {
             setOnClickListener { checkForUpdates() }
         }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) })
         root.addView(actions, match())
+        root.addView(Button(this).apply {
+            text = if (WaslaAccessibilityService.isEnabled()) "التحكم الفعلي مفعّل" else "تفعيل التحكم الفعلي بالتلفاز"
+            isAllCaps = false
+            setOnClickListener {
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } catch (_: Exception) {
+                    status.text = "افتح إعدادات إمكانية الوصول يدوياً لتفعيل وصلة"
+                }
+            }
+        }, match())
+        root.addView(TextView(this).apply {
+            text = "يتطلب التحكم الفعلي تفعيل خدمة وصلة من إعدادات إمكانية الوصول. يمكنك إيقافها في أي وقت."
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(0xffffd166.toInt())
+        }, match())
         setContentView(root)
     }
     private fun createQrImage(payload: String, description: String, size: Int): ImageView {
