@@ -185,7 +185,7 @@ class TvReceiverActivity : Activity() {
     }
     private fun configureRelay() {
         val input = EditText(this).apply {
-            singleLine = true
+            isSingleLine = true
             hint = "https://your-worker.workers.dev"
             setText(getSharedPreferences("wasla_tv_identity", MODE_PRIVATE).getString("relay_base_url", "") ?: "")
             inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
