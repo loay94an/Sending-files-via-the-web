@@ -6,6 +6,10 @@ import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ImageView
+import android.graphics.Bitmap
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 import android.widget.TextView
 
 class TvReceiverActivity : Activity() {
@@ -57,10 +61,38 @@ class TvReceiverActivity : Activity() {
         }
         root.addView(address, match())
         root.addView(TextView(this).apply {
-            text = "رمز الاقتران"
-            textSize = 17f
+            text = "امسح رمز QR من تطبيق وصلة على الهاتف للاقتران تلقائياً"
+            textSize = 18f
             gravity = Gravity.CENTER
             setTextColor(0xffa8bdd7.toInt())
+        }, match())
+        val qrPayload = android.net.Uri.Builder()
+            .scheme("wasla").authority("pair")
+            .appendQueryParameter("ip", WaslaLocalServerService.localIpv4())
+            .appendQueryParameter("port", WaslaLocalServerService.PORT.toString())
+            .appendQueryParameter("code", WaslaLocalServerService.pairCode(this))
+            .appendQueryParameter("id", WaslaLocalServerService.deviceId(this))
+            .build().toString()
+        val qrBitmap = try {
+            val matrix = QRCodeWriter().encode(qrPayload, BarcodeFormat.QR_CODE, 480, 480)
+            Bitmap.createBitmap(480, 480, Bitmap.Config.ARGB_8888).also { bitmap ->
+                for (x in 0 until 480) for (y in 0 until 480) {
+                    bitmap.setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+                }
+            }
+        } catch (_: Exception) { null }
+        root.addView(ImageView(this).apply {
+            setImageBitmap(qrBitmap)
+            setBackgroundColor(android.graphics.Color.WHITE)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            contentDescription = "رمز QR لاقتران الهاتف بالتلفاز"
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }, LinearLayout.LayoutParams(dp(260), dp(260)).apply { gravity = Gravity.CENTER; bottomMargin = dp(10) })
+        root.addView(TextView(this).apply {
+            text = "أو أدخل الرمز يدوياً: " + WaslaLocalServerService.pairCode(this@TvReceiverActivity)
+            textSize = 17f
+            gravity = Gravity.CENTER
+            setTextColor(0xffffd166.toInt())
         }, match())
         root.addView(TextView(this).apply {
             text = WaslaLocalServerService.pairCode(this@TvReceiverActivity)
@@ -82,5 +114,6 @@ class TvReceiverActivity : Activity() {
         }, match())
         setContentView(root)
     }
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun match() = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 18 }
 }
