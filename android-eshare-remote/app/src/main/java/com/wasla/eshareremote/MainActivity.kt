@@ -1939,9 +1939,7 @@ class MainActivity : Activity() {
                     next
                 } ?: break
                 if (waslaTvSocket != null) {
-                    val nx = (position.first / framebufferWidth.coerceAtLeast(1f) * 10000f).toInt().coerceIn(0, 10000)
-                    val ny = (position.second / framebufferHeight.coerceAtLeast(1f) * 10000f).toInt().coerceIn(0, 10000)
-                    if (!sendWaslaAction("MOVE $nx $ny")) {
+                    if (!sendWaslaMove(position.first, position.second)) {
                         throw IllegalStateException("تعذر إرسال حركة المؤشر عبر وصلة")
                     }
                 } else {
