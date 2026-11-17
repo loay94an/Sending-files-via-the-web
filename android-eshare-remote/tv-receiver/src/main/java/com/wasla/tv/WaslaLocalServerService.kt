@@ -170,6 +170,26 @@ class WaslaLocalServerService : Service() {
         return try { DocumentFile.fromTreeUri(this, Uri.parse(raw)) } catch (_: Exception) { null }
     }
 
+    private fun findSharedDocument(uri: Uri, folder: DocumentFile, depth: Int = 0, budget: IntArray = intArrayOf(0)): DocumentFile? {
+        if (depth > 8 || budget[0]++ > 1200) return null
+        if (folder.uri == uri) return folder
+        if (!folder.isDirectory) return null
+        for (child in folder.listFiles()) {
+            if (child.uri == uri) return child
+            if (child.isDirectory) findSharedDocument(uri, child, depth + 1, budget)?.let { return it }
+        }
+        return null
+    }
+
+    private fun findParentOf(uri: Uri, folder: DocumentFile, depth: Int = 0): DocumentFile? {
+        if (depth > 8 || !folder.isDirectory) return null
+        for (child in folder.listFiles()) {
+            if (child.uri == uri) return folder
+            if (child.isDirectory) findParentOf(uri, child, depth + 1)?.let { return it }
+        }
+        return null
+    }
+
     private fun handleFileClient(socket: java.net.Socket) {
         socket.use { client ->
             client.soTimeout = 30_000
@@ -184,11 +204,16 @@ class WaslaLocalServerService : Service() {
                 when (val command = input.readUTF()) {
                     "LIST" -> {
                         val root = selectedFolder()
-                        if (root == null || !root.canRead()) {
-                            output.writeUTF("ERROR FOLDER_NOT_CONFIGURED")
-                        } else {
+                        val requested = command.removePrefix("LIST").trim()
+                        val current = if (requested.isBlank()) root else try {
+                            val uri = Uri.parse(String(Base64.decode(requested, Base64.NO_WRAP), Charsets.UTF_8))
+                            root?.let { findSharedDocument(uri, it) }
+                        } catch (_: Exception) { null }
+                        if (root == null || !root.canRead()) output.writeUTF("ERROR FOLDER_NOT_CONFIGURED")
+                        else if (current == null || !current.isDirectory || !current.canRead()) output.writeUTF("ERROR DIRECTORY_NOT_FOUND")
+                        else {
                             val rows = JSONArray()
-                            root.listFiles().take(150).forEach { doc ->
+                            current.listFiles().take(300).forEach { doc ->
                                 rows.put(JSONObject().apply {
                                     put("id", Base64.encodeToString(doc.uri.toString().toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
                                     put("name", doc.name ?: "ملف")
@@ -248,7 +273,7 @@ class WaslaLocalServerService : Service() {
                                 else {
                                     val uriText = String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
                                     val uri = Uri.parse(uriText)
-                                    val doc = selectedFolder()?.listFiles()?.firstOrNull { it.uri == uri }
+                                    val doc = selectedFolder()?.let { findSharedDocument(uri, it) }
                                     val size = doc?.length() ?: -1L
                                     val stream = if (doc?.canRead() == true && !doc.isDirectory && size in 0L..MAX_FILE_BYTES) contentResolver.openInputStream(doc.uri) else null
                                     if (doc == null || stream == null) output.writeUTF("ERROR NOT_READABLE")
@@ -277,6 +302,33 @@ class WaslaLocalServerService : Service() {
                                     val uri = Uri.parse(uriText)
                                     val doc = selectedFolder()?.listFiles()?.firstOrNull { it.uri == uri }
                                     output.writeUTF(if (doc?.canWrite() == true && !doc.isDirectory && doc.delete()) "DELETED" else "ERROR DELETE_FAILED")
+                                }
+                            }
+                            "MKDIR" -> {
+                                if (parts.size != 2) output.writeUTF("ERROR BAD_REQUEST")
+                                else {
+                                    val name = String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
+                                    val root = selectedFolder()
+                                    val valid = name.isNotBlank() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\\\') && name.length <= 120
+                                    output.writeUTF(when {
+                                        root == null || !root.canWrite() -> "ERROR FOLDER_NOT_WRITABLE"
+                                        !valid -> "ERROR INVALID_NAME"
+                                        root.findFile(name) != null -> "ERROR NAME_EXISTS"
+                                        root.createDirectory(name) != null -> "CREATED"
+                                        else -> "ERROR CREATE_FAILED"
+                                    })
+                                }
+                            }
+                            "RENAME" -> {
+                                if (parts.size != 3) output.writeUTF("ERROR BAD_REQUEST")
+                                else {
+                                    val uri = Uri.parse(String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8))
+                                    val name = String(Base64.decode(parts[2], Base64.NO_WRAP), Charsets.UTF_8)
+                                    val root = selectedFolder()
+                                    val doc = root?.let { findSharedDocument(uri, it) }
+                                    val parent = root?.let { findParentOf(uri, it) }
+                                    val valid = name.isNotBlank() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\\\') && name.length <= 240
+                                    output.writeUTF(if (valid && doc?.canWrite() == true && parent?.findFile(name) == null && doc.renameTo(name)) "RENAMED" else "ERROR RENAME_FAILED")
                                 }
                             }
                             else -> output.writeUTF("ERROR UNKNOWN_COMMAND")
