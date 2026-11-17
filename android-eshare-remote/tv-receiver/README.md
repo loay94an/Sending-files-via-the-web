@@ -23,3 +23,12 @@ This module produces a separate Android TV / Google TV APK.
 - Android TV may stop background services under vendor power-management policies. Foreground service plus boot recovery improves persistence but cannot guarantee availability when the TV is powered off or Android force-stops the app.
 - Remote control of other apps requires a user-enabled Accessibility service or a supported Android TV remote-control API.
 - Screen capture requires Android MediaProjection user consent. DRM-protected video may remain black.
+
+
+## Device compatibility
+
+- Receiver APK minimum Android version: Android 5.0 (API 21) and newer, subject to vendor firmware compatibility.
+- Launcher supports both standard Android launcher and Android TV Leanback launcher.
+- Touchscreen, Wi-Fi and Leanback are declared optional so devices without those features are not filtered out by app stores.
+- Designed for Android TV, Google TV, Android smart displays, Android TV boxes, tablets and phones. This does not make it compatible with proprietary non-Android TV operating systems (for example Tizen, webOS or Roku).
+- Some TV manufacturers restrict background services or boot startup. Always-on behavior depends on the TV firmware, power settings and whether the app is force-stopped.
