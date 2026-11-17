@@ -862,8 +862,8 @@ class MainActivity : Activity() {
         // AIRMOUSEEVNET is EShare's relative pointer protocol. Accumulating
         // motion at a 60 Hz cadence makes the touchpad smoother without losing
         // small movements between transmitted packets.
-        val scaledX = moveDx * framebufferWidth * 0.5f / viewWidth.coerceAtLeast(1)
-        val scaledY = moveDy * framebufferHeight * 0.5f / viewHeight.coerceAtLeast(1)
+        val scaledX = moveDx * framebufferWidth * 0.05f / viewWidth.coerceAtLeast(1)
+        val scaledY = moveDy * framebufferHeight * 0.05f / viewHeight.coerceAtLeast(1)
         val packet = "AIRMOUSEEVNET\r\n$scaledX\r\n$scaledY\r\n$action\r\n\r\n"
         airMouseIo.execute {
             try {
