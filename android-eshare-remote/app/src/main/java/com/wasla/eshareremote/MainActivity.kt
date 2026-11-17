@@ -27,6 +27,8 @@ import android.os.Looper
 import android.view.View
 import android.widget.*
 import java.io.OutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -83,6 +85,8 @@ class MainActivity : Activity() {
     private var touchStartRemoteX = 640f
     private var touchStartRemoteY = 360f
     private var touchStartAt = 0L
+    private var pendingDownloadId: String? = null
+    private var pendingDownloadName: String = "wasla-download.bin"
     private var pendingGyroPosition: Pair<Float, Float>? = null
     private var gyroPositionWriteQueued = false
     private var lastTouchMoveAt = 0L
@@ -781,15 +785,19 @@ class MainActivity : Activity() {
             }
             702 -> {
                 if (resultCode == RESULT_OK) {
-                    val uri = data?.data ?: return
-                    val share = Intent(Intent.ACTION_SEND).apply {
-                        type = contentResolver.getType(uri) ?: "*/*"
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        clipData = android.content.ClipData.newUri(contentResolver, "ملف للتلفاز", uri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    val uris = mutableListOf<android.net.Uri>()
+                    data?.clipData?.let { clip ->
+                        for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let(uris::add)
                     }
-                    startActivity(Intent.createChooser(share, "إرسال الملف إلى تطبيق على التلفاز"))
-                    setStatus("اختر تطبيق استقبال الملفات على التلفاز إن كان مثبتاً")
+                    if (uris.isEmpty()) data?.data?.let(uris::add)
+                    if (uris.isEmpty()) return
+                    uris.forEach { uploadFileToTv(it) }
+                }
+            }
+            703 -> {
+                if (resultCode == RESULT_OK) {
+                    val uri = data?.data ?: return
+                    downloadTvFileTo(uri)
                 }
             }
             701 -> {
@@ -985,13 +993,175 @@ class MainActivity : Activity() {
     }
 
     private fun pickFileForTv() {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "*/*"
-            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        AlertDialog.Builder(this)
+            .setTitle("ملفات التلفاز")
+            .setItems(arrayOf("إرسال ملفات من الهاتف إلى التلفاز", "استعراض وإدارة ملفات التلفاز")) { _, which ->
+                if (which == 0) {
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                    }
+                    try { startActivityForResult(intent, 702) }
+                    catch (_: Exception) { Toast.makeText(this, "تعذر فتح مدير الملفات", Toast.LENGTH_LONG).show() }
+                } else {
+                    showTvFiles()
+                }
+            }.setNegativeButton("إغلاق", null).show()
+    }
+
+    private fun openFileChannel(): Pair<Socket, Pair<DataInputStream, DataOutputStream>> {
+        val ip = prefs.getString("wasla_tv_ip", "") ?: ""
+        val code = prefs.getString("wasla_tv_code", "") ?: ""
+        require(ip.isNotBlank() && code.matches(Regex("\\d{6}"))) { "الهاتف غير مقترن بمستقبل وصلة" }
+        val socket = Socket()
+        socket.tcpNoDelay = true
+        socket.connect(InetSocketAddress(ip, 38472), 6000)
+        socket.soTimeout = 30000
+        val input = DataInputStream(socket.getInputStream())
+        val output = DataOutputStream(socket.getOutputStream())
+        output.writeUTF("PAIR $code")
+        output.flush()
+        check(input.readUTF() == "OK WASLA-FILES/1") { "رفض مستقبل وصلة اتصال الملفات" }
+        return socket to (input to output)
+    }
+
+    private fun uploadFileToTv(uri: android.net.Uri) {
+        io.execute {
+            try {
+                val meta = contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE), null, null, null)
+                var name = "wasla-file.bin"
+                var size = -1L
+                meta?.use { if (it.moveToFirst()) {
+                    val ni = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    val si = it.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (ni >= 0) name = it.getString(ni) ?: name
+                    if (si >= 0 && !it.isNull(si)) size = it.getLong(si)
+                } }
+                if (size < 0) size = contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+                require(size in 0L..536870912L) { "حجم الملف غير معروف أو يتجاوز 512 ميغابايت" }
+                val mime = contentResolver.getType(uri) ?: "application/octet-stream"
+                val name64 = android.util.Base64.encodeToString(name.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                val mime64 = android.util.Base64.encodeToString(mime.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                val (socket, streams) = openFileChannel()
+                socket.use {
+                    val (input, output) = streams
+                    output.writeUTF("PUT $name64 $mime64 $size")
+                    contentResolver.openInputStream(uri)?.use { source ->
+                        val buffer = ByteArray(32 * 1024)
+                        var remaining = size
+                        while (remaining > 0) {
+                            val count = source.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                            if (count < 0) throw java.io.EOFException("انتهى الملف قبل اكتمال الإرسال")
+                            output.write(buffer, 0, count)
+                            remaining -= count
+                        }
+                        output.flush()
+                    } ?: throw IllegalStateException("تعذر فتح الملف المحدد")
+                    val response = input.readUTF()
+                    check(response == "STORED") { response }
+                }
+                setStatus("تم نقل الملف إلى التلفاز: $name")
+            } catch (e: Exception) {
+                setStatus("فشل نقل الملف: ${e.message ?: "خطأ في الاتصال"}")
+            }
         }
-        try { startActivityForResult(intent, 702) }
-        catch (_: Exception) { Toast.makeText(this, "تعذر فتح مدير الملفات", Toast.LENGTH_LONG).show() }
+    }
+
+    private fun showTvFiles() {
+        io.execute {
+            try {
+                val (socket, streams) = openFileChannel()
+                val rows = socket.use {
+                    val (input, output) = streams
+                    output.writeUTF("LIST"); output.flush()
+                    val response = input.readUTF()
+                    check(response.startsWith("FILES ")) { response }
+                    val json = String(android.util.Base64.decode(response.removePrefix("FILES "), android.util.Base64.NO_WRAP), Charsets.UTF_8)
+                    org.json.JSONArray(json)
+                }
+                runOnUiThread {
+                    if (isFinishing) return@runOnUiThread
+                    if (rows.length() == 0) {
+                        AlertDialog.Builder(this).setTitle("ملفات التلفاز").setMessage("المجلد المشترك فارغ").setPositiveButton("حسنًا", null).show()
+                        return@runOnUiThread
+                    }
+                    val labels = Array(rows.length()) { i ->
+                        val item = rows.getJSONObject(i)
+                        val size = item.optLong("size", 0L)
+                        "${item.optString("name")}  •  ${if (item.optBoolean("directory")) "مجلد" else android.text.format.Formatter.formatFileSize(this, size)}"
+                    }
+                    AlertDialog.Builder(this).setTitle("ملفات التلفاز").setItems(labels) { _, index ->
+                        val item = rows.optJSONObject(index) ?: return@setItems
+                        if (item.optBoolean("directory")) {
+                            Toast.makeText(this, "استعراض المجلدات الفرعية سيضاف في المرحلة التالية", Toast.LENGTH_LONG).show()
+                        } else {
+                            val id = item.optString("id")
+                            val name = item.optString("name", "wasla-download.bin")
+                            AlertDialog.Builder(this).setTitle(name)
+                                .setItems(arrayOf("تنزيل إلى الهاتف", "حذف من التلفاز")) { _, action ->
+                                    if (action == 0) {
+                                        pendingDownloadId = id
+                                        pendingDownloadName = name
+                                        val create = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                            addCategory(Intent.CATEGORY_OPENABLE)
+                                            type = item.optString("mime", "application/octet-stream")
+                                            putExtra(Intent.EXTRA_TITLE, name)
+                                        }
+                                        startActivityForResult(create, 703)
+                                    } else deleteTvFile(id, name)
+                                }.setNegativeButton("إلغاء", null).show()
+                        }
+                    }.setNegativeButton("إغلاق", null).show()
+                }
+            } catch (e: Exception) {
+                setStatus("تعذر استعراض ملفات التلفاز: ${e.message ?: "تحقق من الاقتران ومجلد المشاركة"}")
+            }
+        }
+    }
+
+    private fun deleteTvFile(id: String, name: String) {
+        io.execute {
+            try {
+                val (socket, streams) = openFileChannel()
+                val result = socket.use {
+                    val (input, output) = streams
+                    output.writeUTF("DELETE $id"); output.flush()
+                    input.readUTF()
+                }
+                setStatus(if (result == "DELETED") "تم حذف $name من التلفاز" else "تعذر حذف الملف: $result")
+            } catch (e: Exception) { setStatus("فشل الحذف: ${e.message}") }
+        }
+    }
+
+    private fun downloadTvFileTo(destination: android.net.Uri) {
+        val id = pendingDownloadId ?: return
+        io.execute {
+            try {
+                val (socket, streams) = openFileChannel()
+                socket.use {
+                    val (input, output) = streams
+                    output.writeUTF("GET $id"); output.flush()
+                    val header = input.readUTF().split(' ')
+                    check(header.size == 4 && header[0] == "DATA") { header.joinToString(" ") }
+                    val size = header[1].toLong()
+                    require(size in 0L..536870912L) { "حجم ملف غير صالح" }
+                    val target = contentResolver.openOutputStream(destination) ?: error("تعذر فتح وجهة الحفظ")
+                    target.use { sink ->
+                        val buffer = ByteArray(32 * 1024)
+                        var remaining = size
+                        while (remaining > 0) {
+                            val count = minOf(buffer.size.toLong(), remaining).toInt()
+                            input.readFully(buffer, 0, count)
+                            sink.write(buffer, 0, count)
+                            remaining -= count
+                        }
+                    }
+                }
+                setStatus("اكتمل تنزيل الملف: $pendingDownloadName")
+            } catch (e: Exception) { setStatus("فشل تنزيل الملف: ${e.message}") }
+            finally { pendingDownloadId = null }
+        }
     }
 
     private fun addSectionLabel(parent: LinearLayout, label: String) {
