@@ -248,6 +248,7 @@ class MainActivity : Activity() {
                     true
                 }
                 android.view.MotionEvent.ACTION_UP -> {
+                    if (!airMouseEnabled) sendTouchMouseEvent(0f, 0f, 1, view.width, view.height)
                     val totalDx = event.x - downX
                     val totalDy = event.y - downY
                     if (airMouseEnabled && moved) {
@@ -860,19 +861,21 @@ class MainActivity : Activity() {
         viewWidth: Int = 1,
         viewHeight: Int = 1
     ) {
-        if (action != 2) return
-        // Keep all finger motion and update a persistent ABSOLUTE framebuffer
-        // position. This avoids relative-pointer firmware behavior that can
-        // snap the cursor back to screen center between touch gestures.
-        pendingTouchDx += dx
-        pendingTouchDy += dy
-        val now = System.currentTimeMillis()
-        if (now - lastTouchMoveAt < 16L) return
-        lastTouchMoveAt = now
+        if (action == 2) {
+            pendingTouchDx += dx
+            pendingTouchDy += dy
+            if (System.currentTimeMillis() - lastTouchMoveAt < 16L) return
+            lastTouchMoveAt = System.currentTimeMillis()
+        } else if (action != 1) {
+            return
+        }
+        // Flush any final sub-16ms movement on finger-up, then update a
+        // persistent ABSOLUTE framebuffer position instead of relative deltas.
         val moveDx = pendingTouchDx
         val moveDy = pendingTouchDy
         pendingTouchDx = 0f
         pendingTouchDy = 0f
+        if (moveDx == 0f && moveDy == 0f) return
         val scaledX = moveDx * framebufferWidth * 0.05f / viewWidth.coerceAtLeast(1)
         val scaledY = moveDy * framebufferHeight * 0.05f / viewHeight.coerceAtLeast(1)
         gyroCursorX = (gyroCursorX + scaledX).coerceIn(0f, framebufferWidth)
