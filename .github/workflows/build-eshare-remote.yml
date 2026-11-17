@@ -8,7 +8,7 @@ on:
       - "android-eshare-remote/**"
       - ".github/workflows/build-eshare-remote.yml"
   pull_request:
-    branches: [main, feat/eshare-text-longpress-reconnect]
+    branches: [main, feat/eshare-text-longpress-reconnect, feat/wasla-functional-receiver-phase1]
     paths:
       - "android-eshare-remote/**"
       - ".github/workflows/build-eshare-remote.yml"
