@@ -1005,7 +1005,7 @@ class MainActivity : Activity() {
         val latch = java.util.concurrent.CountDownLatch(1)
         runOnUiThread {
             val details = devices.joinToString("\n\n") {
-                "• \${it.name}\n\${it.ip}\nموجودة على الشبكة — خدمة EShare غير ظاهرة"
+                "• ${it.name}\n${it.ip}\nموجودة على الشبكة — خدمة EShare غير ظاهرة"
             }
             android.app.AlertDialog.Builder(this)
                 .setTitle("تم اكتشاف شاشة على الشبكة")
