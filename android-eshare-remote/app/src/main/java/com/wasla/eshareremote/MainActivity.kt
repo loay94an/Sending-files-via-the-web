@@ -93,8 +93,8 @@ class MainActivity : Activity() {
         }
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-        startLocalHttpServer()
         buildUi()
+        startLocalHttpServer()
         val saved = prefs.getString("ip", "") ?: ""
         ipInput.setText(saved)
         discoverAndConnect()
