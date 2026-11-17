@@ -2,17 +2,21 @@ name: Build Wasla EShare Remote APK
 
 on:
   push:
-    branches: [feat/eshare-arabic-remote, fix/eshare-hotspot-airmouse, fix/airmouse-protocol-scaling, fix/pointer-click-protocol, feat/eshare-text-longpress-reconnect, feat/wasla-tv-server-foundation]
+    branches: [feat/eshare-arabic-remote, fix/eshare-hotspot-airmouse, fix/airmouse-protocol-scaling, fix/pointer-click-protocol, feat/eshare-text-longpress-reconnect, feat/wasla-tv-server-foundation, feat/wasla-functional-receiver-phase1]
     tags: ["v*"]
     paths:
       - "android-eshare-remote/**"
       - ".github/workflows/build-eshare-remote.yml"
   pull_request:
-    branches: [main]
+    branches: [main, feat/eshare-text-longpress-reconnect, feat/wasla-functional-receiver-phase1]
     paths:
       - "android-eshare-remote/**"
       - ".github/workflows/build-eshare-remote.yml"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -57,16 +61,20 @@ jobs:
           path: android-eshare-remote/tv-receiver/build/outputs/apk/debug/tv-receiver-debug.apk
           if-no-files-found: error
       - name: Prepare release APKs
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/feat/wasla-functional-receiver-phase1'
         run: |
           mkdir -p release-assets
           cp android-eshare-remote/app/build/outputs/apk/debug/app-debug.apk "release-assets/wasla-eshare-remote-v${{ steps.app-version.outputs.name }}.apk"
           cp android-eshare-remote/tv-receiver/build/outputs/apk/debug/tv-receiver-debug.apk "release-assets/wasla-tv-receiver-v${{ steps.app-version.outputs.tv_name }}.apk"
       - name: Publish APKs to GitHub Releases
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/feat/wasla-functional-receiver-phase1'
         uses: softprops/action-gh-release@v2
         with:
-          name: "وصلة ${{ github.ref_name }}"
+          name: "وصلة v${{ steps.app-version.outputs.name }}"
+          tag_name: "v${{ steps.app-version.outputs.name }}"
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          prerelease: false
           generate_release_notes: true
           files: |
             release-assets/wasla-eshare-remote-v${{ steps.app-version.outputs.name }}.apk

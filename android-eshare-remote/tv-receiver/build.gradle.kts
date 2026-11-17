@@ -9,8 +9,8 @@ android {
         applicationId = "com.wasla.tv"
         minSdk = 21
         targetSdk = 28
-        versionCode = 2
-        versionName = "0.1.2"
+        versionCode = 4
+        versionName = "0.1.4"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -21,4 +21,6 @@ android {
 
 dependencies {
     implementation("com.google.zxing:core:3.5.3")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.documentfile:documentfile:1.0.1")
 }

@@ -12,6 +12,7 @@ import android.graphics.Bitmap
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import android.widget.TextView
+import android.widget.EditText
 import android.net.Uri
 import java.net.HttpURLConnection
 import java.net.URL
@@ -119,7 +120,7 @@ class TvReceiverActivity : Activity() {
             setTextColor(0xffffd166.toInt())
         }, match())
         root.addView(TextView(this).apply {
-            text = "هذه النسخة تؤسس هوية التلفاز وخادم TCP محلياً. الاتصال عبر الإنترنت ومشاهدة الشاشة والبث والتحكم بالنظام مراحل تالية تتطلب ربط تطبيق الهاتف وخدمة وسيطة وصلاحيات Android."
+            text = "يوفر مستقبل وصلة التحكم الأساسي ونقل الملفات إلى المجلد الذي تختاره. للاتصال من خارج الشبكة المحلية، أدخل عنوان خادم وصلة الآمن في إعدادات الإنترنت على الهاتف والتلفاز. بث الشاشة ومشاهدتها في الاتجاهين يحتاجان بعد إلى تنفيذ WebRTC مستقل."
             textSize = 15f
             gravity = Gravity.CENTER
             setTextColor(0xffa8bdd7.toInt())
@@ -140,8 +141,89 @@ class TvReceiverActivity : Activity() {
             setOnClickListener { checkForUpdates() }
         }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) })
         root.addView(actions, match())
+        root.addView(Button(this).apply {
+            text = "اختيار مجلد مشاركة الملفات"
+            isAllCaps = false
+            setOnClickListener {
+                try {
+                    startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), 38472)
+                } catch (_: Exception) {
+                    status.text = "تعذر فتح اختيار المجلدات على هذا الجهاز"
+                }
+            }
+        }, match())
+        val sharedFolder = getSharedPreferences("wasla_tv_identity", MODE_PRIVATE).getString("shared_tree_uri", null)
+        root.addView(TextView(this).apply {
+            text = if (sharedFolder.isNullOrBlank()) "لم يتم اختيار مجلد للملفات بعد" else "مجلد مشاركة الملفات مهيأ"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(0xffa8bdd7.toInt())
+        }, match())
+        root.addView(Button(this).apply {
+            text = if (WaslaAccessibilityService.isEnabled()) "التحكم الفعلي مفعّل" else "تفعيل التحكم الفعلي بالتلفاز"
+            isAllCaps = false
+            setOnClickListener {
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } catch (_: Exception) {
+                    status.text = "افتح إعدادات إمكانية الوصول يدوياً لتفعيل وصلة"
+                }
+            }
+        }, match())
+        root.addView(TextView(this).apply {
+            text = "يتطلب التحكم الفعلي تفعيل خدمة وصلة من إعدادات إمكانية الوصول. يمكنك إيقافها في أي وقت."
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(0xffffd166.toInt())
+        }, match())
+        root.addView(Button(this).apply {
+            text = "إعداد الاتصال الآمن عبر الإنترنت"
+            isAllCaps = false
+            setOnClickListener { configureRelay() }
+        }, match())
         setContentView(root)
     }
+    private fun configureRelay() {
+        val input = EditText(this).apply {
+            isSingleLine = true
+            hint = "https://your-worker.workers.dev"
+            setText(getSharedPreferences("wasla_tv_identity", MODE_PRIVATE).getString("relay_base_url", "") ?: "")
+            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
+        }
+        AlertDialog.Builder(this)
+            .setTitle("خادم وصلة للاتصال عبر الإنترنت")
+            .setMessage("أدخل عنوان Cloudflare Worker بعد نشره. يجب أن يكون اتصالاً آمناً HTTPS.")
+            .setView(input)
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("حفظ والاتصال") { _, _ ->
+                val value = input.text.toString().trim().trimEnd('/')
+                getSharedPreferences("wasla_tv_identity", MODE_PRIVATE).edit()
+                    .putString("relay_base_url", value).apply()
+                val service = Intent(this, WaslaLocalServerService::class.java).apply {
+                    action = WaslaLocalServerService.ACTION_RECONNECT_RELAY
+                }
+                if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(service) else startService(service)
+                status.text = if (value.isBlank()) "تم تعطيل إعداد خادم الإنترنت" else "جارٍ الاتصال بخادم وصلة الآمن..."
+            }.show()
+    }
+
+    @Deprecated("Deprecated in Android API; retained for minSdk 21 compatibility")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 38472 && resultCode == RESULT_OK) {
+            val uri = data?.data ?: return
+            try {
+                val flags = data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                contentResolver.takePersistableUriPermission(uri, flags)
+                getSharedPreferences("wasla_tv_identity", MODE_PRIVATE).edit()
+                    .putString("shared_tree_uri", uri.toString()).apply()
+                status.text = "تم إعداد مجلد مشاركة الملفات"
+            } catch (_: Exception) {
+                status.text = "لم يتم منح صلاحية دائمة للمجلد؛ اختر مجلداً آخر"
+            }
+        }
+    }
+
     private fun createQrImage(payload: String, description: String, size: Int): ImageView {
         val bitmap = try {
             val matrix = QRCodeWriter().encode(payload, BarcodeFormat.QR_CODE, size, size)

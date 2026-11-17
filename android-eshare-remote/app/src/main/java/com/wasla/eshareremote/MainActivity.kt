@@ -27,6 +27,8 @@ import android.os.Looper
 import android.view.View
 import android.widget.*
 import java.io.OutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -43,6 +45,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import java.util.concurrent.atomic.AtomicLong
 
 class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
@@ -80,6 +88,16 @@ class MainActivity : Activity() {
     private var framebufferHeight = 720f
     private var gyroCursorX = 640f
     private var gyroCursorY = 360f
+    private var touchStartRemoteX = 640f
+    private var touchStartRemoteY = 360f
+    private var touchStartAt = 0L
+    private var pendingDownloadId: String? = null
+    private var pendingDownloadName: String = "wasla-download.bin"
+    private val tvFolderStack = mutableListOf<String>()
+    private val relayClient = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
+    @Volatile private var relaySocket: WebSocket? = null
+    private val relayConnecting = AtomicBoolean(false)
+    private val relayMessageId = AtomicLong(0L)
     private var pendingGyroPosition: Pair<Float, Float>? = null
     private var gyroPositionWriteQueued = false
     private var lastTouchMoveAt = 0L
@@ -99,6 +117,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
+    private var connectionIpLabel: TextView? = null
     private lateinit var textInput: EditText
     private var suppressTextWatcher = false
     private val prefs by lazy { getSharedPreferences("remote", Context.MODE_PRIVATE) }
@@ -135,6 +154,7 @@ class MainActivity : Activity() {
         val savedWaslaCode = prefs.getString("wasla_tv_code", "") ?: ""
         startWaslaLinkMonitor()
         if (savedWaslaIp.isNotBlank() && savedWaslaCode.isNotBlank()) connectWaslaReceiver(savedWaslaIp, savedWaslaCode)
+        connectWaslaRelay()
     }
 
     private fun buildUi() {
@@ -232,6 +252,60 @@ class MainActivity : Activity() {
         })
         root.addView(header, lp(-1, dp(72)))
 
+        // Separate direct discovery from QR pairing for a clearer two-action connection UI.
+        ipInput = EditText(this) // retained internally for discovered-IP compatibility; not shown in the main UI
+        val connectionActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            background = surface(0xff0c192d.toInt(), 16, 0xff263f61.toInt())
+            setPadding(dp(7), dp(3), dp(7), dp(3))
+        }
+        connectButton = makeButton("اتصال", 40, true).apply {
+            textSize = 13f
+            setOnClickListener { discoverWaslaThenEShare() }
+        }
+        connectionActions.addView(connectButton, LinearLayout.LayoutParams(dp(104), dp(40)).apply {
+            marginEnd = dp(7)
+        })
+        val qrButton = makeButton("⌗", 38, false).apply {
+            textSize = 18f
+            contentDescription = "مسح رمز QR للاتصال"
+            setOnClickListener { startWaslaQrScanner() }
+        }
+        connectionActions.addView(qrButton, LinearLayout.LayoutParams(dp(40), dp(38)).apply {
+            marginEnd = dp(9)
+        })
+        connectionIpLabel = TextView(this).apply {
+            text = "⌁  غير متصل"
+            textSize = 12f
+            setTextColor(0xff9eb5d4.toInt())
+            gravity = Gravity.CENTER_VERTICAL or Gravity.START
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        connectionActions.addView(connectionIpLabel, LinearLayout.LayoutParams(0, dp(38), 1f))
+        root.addView(connectionActions, LinearLayout.LayoutParams(-1, dp(46)).apply {
+            topMargin = dp(7); bottomMargin = dp(3)
+        })
+
+        val shortcuts = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
+        val castButton = makeButton("▣  مشاركة الشاشة", 48, true).apply {
+            textSize = 13f
+            setOnClickListener { openScreenShareSettings() }
+        }
+        shortcuts.addView(castButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(5) })
+        val filesButton = makeButton("⇧  نقل الملفات", 48).apply {
+            textSize = 13f
+            setOnClickListener { pickFileForTv() }
+        }
+        shortcuts.addView(filesButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(5) })
+        root.addView(shortcuts, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(7); bottomMargin = dp(3) })
+
         // Phone keyboard input sits above the sharing and file-transfer shortcuts.
         val textEntry = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -279,33 +353,6 @@ class MainActivity : Activity() {
             } else false
         }
         root.addView(textEntry, LinearLayout.LayoutParams(-1, dp(52)).apply {
-            topMargin = dp(7); bottomMargin = dp(3)
-        })
-
-        val shortcuts = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
-        }
-        val castButton = makeButton("▣  مشاركة الشاشة", 48, true).apply {
-            textSize = 13f
-            setOnClickListener { openScreenShareSettings() }
-        }
-        shortcuts.addView(castButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(5) })
-        val filesButton = makeButton("⇧  نقل الملفات", 48).apply {
-            textSize = 13f
-            setOnClickListener { pickFileForTv() }
-        }
-        shortcuts.addView(filesButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(5) })
-        root.addView(shortcuts, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(7); bottomMargin = dp(3) })
-
-        // One connection entry point: automatic discovery or QR pairing.
-        ipInput = EditText(this) // retained internally for discovered-IP compatibility; not shown in the main UI
-        connectButton = makeButton("اتصال", 48, true).apply {
-            textSize = 15f
-            setOnClickListener { showConnectionOptions() }
-        }
-        root.addView(connectButton, LinearLayout.LayoutParams(-1, dp(48)).apply {
             topMargin = dp(7); bottomMargin = dp(5)
         })
 
@@ -338,6 +385,9 @@ class MainActivity : Activity() {
             when (event.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
                     downX = event.x; downY = event.y
+                    touchStartRemoteX = gyroCursorX
+                    touchStartRemoteY = gyroCursorY
+                    touchStartAt = System.currentTimeMillis()
                     lastTouchX = event.x; lastTouchY = event.y
                     moved = false
                     longPressTriggered = false
@@ -386,6 +436,11 @@ class MainActivity : Activity() {
                         // Air-mouse tap clicks the current gyro pointer position,
                         // matching the corrected normal touchpad click behavior.
                         sendPointerClick()
+                    } else if (moved && waslaTvSocket != null) {
+                        sendWaslaSwipe(
+                            touchStartRemoteX, touchStartRemoteY, gyroCursorX, gyroCursorY,
+                            (System.currentTimeMillis() - touchStartAt).coerceIn(80L, 2000L)
+                        )
                     } else if (!moved) {
                         // Click the current absolute pointer position; do not send
                         // KEYEVENT OK, which selects focus rather than the cursor target.
@@ -666,6 +721,18 @@ class MainActivity : Activity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
             override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
         })
+        val relayLabel = TextView(this).apply {
+            text = "خادم الاتصال الآمن عبر الإنترنت (اختياري)"
+            textSize = 14f
+            setTextColor(0xff15243a.toInt())
+        }
+        val relayInput = EditText(this).apply {
+            hint = "https://your-worker.workers.dev"
+            isSingleLine = true
+            textSize = 14f
+            setText(prefs.getString("relay_base_url", "") ?: "")
+            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
+        }
         val touchLabel = TextView(this).apply { textSize = 15f; setTextColor(0xff15243a.toInt()) }
         val touchSeek = SeekBar(this).apply {
             max = 20
@@ -683,6 +750,8 @@ class MainActivity : Activity() {
         content.addView(airSeek, LinearLayout.LayoutParams(-1, dp(44)))
         content.addView(touchLabel)
         content.addView(touchSeek, LinearLayout.LayoutParams(-1, dp(44)))
+        content.addView(relayLabel)
+        content.addView(relayInput, LinearLayout.LayoutParams(-1, dp(48)))
         AlertDialog.Builder(this)
             .setTitle("إعدادات وصلة")
             .setView(content)
@@ -691,8 +760,10 @@ class MainActivity : Activity() {
                 prefs.edit()
                     .putFloat("air_mouse_sensitivity", (500 + airSeek.progress).toFloat())
                     .putFloat("touchpad_sensitivity", 0.5f + touchSeek.progress / 10f)
+                    .putString("relay_base_url", relayInput.text.toString().trim().trimEnd('/'))
                     .apply()
-                setStatus("تم حفظ إعدادات حساسية المؤشر")
+                if (relayInput.text.toString().isNotBlank()) connectWaslaRelay() else disconnectWaslaRelay()
+                setStatus("تم حفظ إعدادات وصلة")
             }
             .setNeutralButton("تحديث التطبيق") { _, _ -> checkForUpdates() }
             .show()
@@ -770,15 +841,19 @@ class MainActivity : Activity() {
             }
             702 -> {
                 if (resultCode == RESULT_OK) {
-                    val uri = data?.data ?: return
-                    val share = Intent(Intent.ACTION_SEND).apply {
-                        type = contentResolver.getType(uri) ?: "*/*"
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        clipData = android.content.ClipData.newUri(contentResolver, "ملف للتلفاز", uri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    val uris = mutableListOf<android.net.Uri>()
+                    data?.clipData?.let { clip ->
+                        for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let(uris::add)
                     }
-                    startActivity(Intent.createChooser(share, "إرسال الملف إلى تطبيق على التلفاز"))
-                    setStatus("اختر تطبيق استقبال الملفات على التلفاز إن كان مثبتاً")
+                    if (uris.isEmpty()) data?.data?.let(uris::add)
+                    if (uris.isEmpty()) return
+                    uris.forEach { uploadFileToTv(it) }
+                }
+            }
+            703 -> {
+                if (resultCode == RESULT_OK) {
+                    val uri = data?.data ?: return
+                    downloadTvFileTo(uri)
                 }
             }
             701 -> {
@@ -974,13 +1049,242 @@ class MainActivity : Activity() {
     }
 
     private fun pickFileForTv() {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "*/*"
-            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        AlertDialog.Builder(this)
+            .setTitle("ملفات التلفاز")
+            .setItems(arrayOf("إرسال ملفات من الهاتف إلى التلفاز", "استعراض وإدارة ملفات التلفاز")) { _, which ->
+                if (which == 0) {
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                    }
+                    try { startActivityForResult(intent, 702) }
+                    catch (_: Exception) { Toast.makeText(this, "تعذر فتح مدير الملفات", Toast.LENGTH_LONG).show() }
+                } else {
+                    showTvFiles()
+                }
+            }.setNegativeButton("إغلاق", null).show()
+    }
+
+    private fun openFileChannel(): Pair<Socket, Pair<DataInputStream, DataOutputStream>> {
+        val ip = prefs.getString("wasla_tv_ip", "") ?: ""
+        val code = prefs.getString("wasla_tv_code", "") ?: ""
+        require(ip.isNotBlank() && code.matches(Regex("\\d{6}"))) { "الهاتف غير مقترن بمستقبل وصلة" }
+        val socket = Socket()
+        socket.tcpNoDelay = true
+        socket.connect(InetSocketAddress(ip, 38472), 6000)
+        socket.soTimeout = 120000
+        val input = DataInputStream(socket.getInputStream())
+        val output = DataOutputStream(socket.getOutputStream())
+        output.writeUTF("PAIR $code")
+        output.flush()
+        check(input.readUTF() == "OK WASLA-FILES/1") { "رفض مستقبل وصلة اتصال الملفات" }
+        return socket to (input to output)
+    }
+
+    private fun uploadFileToTv(uri: android.net.Uri) {
+        io.execute {
+            try {
+                val meta = contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE), null, null, null)
+                var name = "wasla-file.bin"
+                var size = -1L
+                meta?.use { if (it.moveToFirst()) {
+                    val ni = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    val si = it.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (ni >= 0) name = it.getString(ni) ?: name
+                    if (si >= 0 && !it.isNull(si)) size = it.getLong(si)
+                } }
+                if (size < 0) size = contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+                require(size in 0L..536870912L) { "حجم الملف غير معروف أو يتجاوز 512 ميغابايت" }
+                val mime = contentResolver.getType(uri) ?: "application/octet-stream"
+                val name64 = android.util.Base64.encodeToString(name.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                val mime64 = android.util.Base64.encodeToString(mime.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                setStatus("جارٍ تجهيز نقل الملف: $name")
+                val (socket, streams) = openFileChannel()
+                socket.use {
+                    val (input, output) = streams
+                    output.writeUTF("PUT ${tvFolderStack.lastOrNull() ?: "ROOT"} $name64 $mime64 $size")
+                    contentResolver.openInputStream(uri)?.use { source ->
+                        val buffer = ByteArray(32 * 1024)
+                        var remaining = size
+                        var reported = -1
+                        while (remaining > 0) {
+                            val count = source.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                            if (count < 0) throw java.io.EOFException("انتهى الملف قبل اكتمال الإرسال")
+                            output.write(buffer, 0, count)
+                            remaining -= count
+                            val percent = (((size - remaining) * 100) / size).toInt()
+                            if (percent >= reported + 5 || remaining == 0L) {
+                                reported = percent
+                                setStatus("إرسال $name إلى التلفاز: $percent%")
+                            }
+                        }
+                        output.flush()
+                    } ?: throw IllegalStateException("تعذر فتح الملف المحدد")
+                    val response = input.readUTF()
+                    check(response == "STORED") { response }
+                }
+                setStatus("تم نقل الملف إلى التلفاز: $name")
+            } catch (e: Exception) {
+                setStatus("فشل نقل الملف: ${e.message ?: "خطأ في الاتصال"}")
+            }
         }
-        try { startActivityForResult(intent, 702) }
-        catch (_: Exception) { Toast.makeText(this, "تعذر فتح مدير الملفات", Toast.LENGTH_LONG).show() }
+    }
+
+    private fun showTvFiles() {
+        io.execute {
+            try {
+                val (socket, streams) = openFileChannel()
+                val rows = socket.use {
+                    val (input, output) = streams
+                    val directoryId = tvFolderStack.lastOrNull()
+                    output.writeUTF(if (directoryId == null) "LIST" else "LIST $directoryId")
+                    output.flush()
+                    val response = input.readUTF()
+                    check(response.startsWith("FILES ")) { response }
+                    val json = String(android.util.Base64.decode(response.removePrefix("FILES "), android.util.Base64.NO_WRAP), Charsets.UTF_8)
+                    org.json.JSONArray(json)
+                }
+                runOnUiThread {
+                    if (isFinishing) return@runOnUiThread
+                    val labels = Array(rows.length()) { i ->
+                        val item = rows.getJSONObject(i)
+                        val size = item.optLong("size", 0L)
+                        "${item.optString("name")}  •  ${if (item.optBoolean("directory")) "مجلد" else android.text.format.Formatter.formatFileSize(this, size)}"
+                    }
+                    AlertDialog.Builder(this).setTitle("ملفات التلفاز").setItems(labels) { _, index ->
+                        val item = rows.optJSONObject(index) ?: return@setItems
+                        if (item.optBoolean("directory")) {
+                            tvFolderStack.add(item.optString("id"))
+                            showTvFiles()
+                        } else {
+                            val id = item.optString("id")
+                            val name = item.optString("name", "wasla-download.bin")
+                            AlertDialog.Builder(this).setTitle(name)
+                                .setItems(arrayOf("تنزيل إلى الهاتف", "إعادة تسمية", "حذف من التلفاز")) { _, action ->
+                                    when (action) {
+                                        0 -> {
+                                            pendingDownloadId = id
+                                            pendingDownloadName = name
+                                            val create = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                                addCategory(Intent.CATEGORY_OPENABLE)
+                                                type = item.optString("mime", "application/octet-stream")
+                                                putExtra(Intent.EXTRA_TITLE, name)
+                                            }
+                                            startActivityForResult(create, 703)
+                                        }
+                                        1 -> renameTvFile(id, name)
+                                        2 -> deleteTvFile(id, name)
+                                    }
+                                }.setNegativeButton("إلغاء", null).show()
+                        }
+                    }.setPositiveButton(if (tvFolderStack.isEmpty()) "إغلاق" else "المجلد السابق") { _, _ ->
+                        if (tvFolderStack.isNotEmpty()) {
+                            tvFolderStack.removeAt(tvFolderStack.lastIndex)
+                            showTvFiles()
+                        }
+                    }
+                    .setNeutralButton("مجلد جديد") { _, _ -> createTvFolder() }
+                    .setNegativeButton("إغلاق", null).show()
+                }
+            } catch (e: Exception) {
+                setStatus("تعذر استعراض ملفات التلفاز: ${e.message ?: "تحقق من الاقتران ومجلد المشاركة"}")
+            }
+        }
+    }
+
+    private fun createTvFolder() {
+        val field = EditText(this).apply { hint = "اسم المجلد"; isSingleLine = true }
+        AlertDialog.Builder(this).setTitle("إنشاء مجلد").setView(field)
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("إنشاء") { _, _ ->
+                val name = field.text.toString().trim()
+                io.execute {
+                    try {
+                        val (socket, streams) = openFileChannel()
+                        val result = socket.use {
+                            val (input, output) = streams
+                            val encoded = android.util.Base64.encodeToString(name.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                            output.writeUTF("MKDIR ${tvFolderStack.lastOrNull() ?: "ROOT"} $encoded"); output.flush()
+                            input.readUTF()
+                        }
+                        setStatus(if (result == "CREATED") "تم إنشاء المجلد" else "تعذر إنشاء المجلد: $result")
+                        if (result == "CREATED") showTvFiles()
+                    } catch (e: Exception) { setStatus("فشل إنشاء المجلد: ${e.message}") }
+                }
+            }.show()
+    }
+
+    private fun renameTvFile(id: String, oldName: String) {
+        val field = EditText(this).apply { setText(oldName); isSingleLine = true }
+        AlertDialog.Builder(this).setTitle("إعادة تسمية").setView(field)
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("حفظ") { _, _ ->
+                val name = field.text.toString().trim()
+                io.execute {
+                    try {
+                        val (socket, streams) = openFileChannel()
+                        val result = socket.use {
+                            val (input, output) = streams
+                            val encodedName = android.util.Base64.encodeToString(name.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                            output.writeUTF("RENAME $id $encodedName"); output.flush()
+                            input.readUTF()
+                        }
+                        setStatus(if (result == "RENAMED") "تمت إعادة التسمية" else "تعذرت إعادة التسمية: $result")
+                        if (result == "RENAMED") showTvFiles()
+                    } catch (e: Exception) { setStatus("فشلت إعادة التسمية: ${e.message}") }
+                }
+            }.show()
+    }
+
+    private fun deleteTvFile(id: String, name: String) {
+        io.execute {
+            try {
+                val (socket, streams) = openFileChannel()
+                val result = socket.use {
+                    val (input, output) = streams
+                    output.writeUTF("DELETE $id"); output.flush()
+                    input.readUTF()
+                }
+                setStatus(if (result == "DELETED") "تم حذف $name من التلفاز" else "تعذر حذف الملف: $result")
+            } catch (e: Exception) { setStatus("فشل الحذف: ${e.message}") }
+        }
+    }
+
+    private fun downloadTvFileTo(destination: android.net.Uri) {
+        val id = pendingDownloadId ?: return
+        io.execute {
+            try {
+                val (socket, streams) = openFileChannel()
+                socket.use {
+                    val (input, output) = streams
+                    output.writeUTF("GET $id"); output.flush()
+                    val header = input.readUTF().split(' ')
+                    check(header.size == 4 && header[0] == "DATA") { header.joinToString(" ") }
+                    val size = header[1].toLong()
+                    require(size in 0L..536870912L) { "حجم ملف غير صالح" }
+                    val target = contentResolver.openOutputStream(destination) ?: error("تعذر فتح وجهة الحفظ")
+                    target.use { sink ->
+                        val buffer = ByteArray(32 * 1024)
+                        var remaining = size
+                        var reported = -1
+                        while (remaining > 0) {
+                            val count = minOf(buffer.size.toLong(), remaining).toInt()
+                            input.readFully(buffer, 0, count)
+                            sink.write(buffer, 0, count)
+                            remaining -= count
+                            val percent = if (size == 0L) 100 else (((size - remaining) * 100) / size).toInt()
+                            if (percent >= reported + 5 || remaining == 0L) {
+                                reported = percent
+                                setStatus("تنزيل $pendingDownloadName إلى الهاتف: $percent%")
+                            }
+                        }
+                    }
+                }
+                setStatus("اكتمل تنزيل الملف: $pendingDownloadName")
+            } catch (e: Exception) { setStatus("فشل تنزيل الملف: ${e.message}") }
+            finally { pendingDownloadId = null }
+        }
     }
 
     private fun addSectionLabel(parent: LinearLayout, label: String) {
@@ -1424,6 +1728,7 @@ class MainActivity : Activity() {
             try { socket.soTimeout = 0 } catch (_: Exception) { }
         }
         startSocketReader(socket)
+        runOnUiThread { connectionIpLabel?.text = "⌁  ${device.ip}" }
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
     }
 
@@ -1500,7 +1805,7 @@ class MainActivity : Activity() {
         val scaledY = moveDy * framebufferHeight * touchSensitivity / viewHeight.coerceAtLeast(1)
         gyroCursorX = (gyroCursorX + scaledX).coerceIn(0f, framebufferWidth)
         gyroCursorY = (gyroCursorY + scaledY).coerceIn(0f, framebufferHeight)
-        sendGyroPosition(gyroCursorX, gyroCursorY)
+        if (waslaTvSocket == null) sendGyroPosition(gyroCursorX, gyroCursorY)
     }
 
     private fun sendPointerClick() {
@@ -1510,6 +1815,7 @@ class MainActivity : Activity() {
         // cursor coordinates on firmware that processes pointer events late.
         val x = gyroCursorX
         val y = gyroCursorY
+        if (sendWaslaTap(x, y)) return
         airMouseIo.execute {
             try {
                 writePointerPacket("GYROSCOPEEVENT\r\n$x\r\n$y\r\n2\r\n\r\n")
@@ -1523,6 +1829,7 @@ class MainActivity : Activity() {
     }
 
     private fun sendGyroPosition(x: Float, y: Float) {
+        if (waslaTvSocket != null) return
         synchronized(gyroPositionLock) {
             pendingGyroPosition = x to y
             if (gyroPositionWriteQueued) return
@@ -1749,14 +2056,23 @@ class MainActivity : Activity() {
                 val now = android.os.SystemClock.elapsedRealtime()
                 lastWaslaPongAt = now
                 lastWaslaPingAt = now
-                prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code).apply()
+                prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code)
+                    .putString("wasla_tv_id", expectedDeviceId ?: "").apply()
+                runOnUiThread { connectionIpLabel?.text = "⌁  $ip" }
                 setStatus("متصل بمستقبل وصلة على التلفاز — اتصال محلي")
+                connectWaslaRelay()
                 Thread({
                     try {
                         while (!socket.isClosed) {
                             val line = try { reader.readLine() } catch (_: SocketTimeoutException) { continue } ?: break
                             if (line == "PONG") {
                                 lastWaslaPongAt = android.os.SystemClock.elapsedRealtime()
+                            } else if (line == "ACTION_UNAVAILABLE") {
+                                setStatus("الاتصال قائم، لكن يجب تفعيل خدمة وصلة من إعدادات إمكانية الوصول على التلفاز")
+                            } else if (line == "BAD_ACTION") {
+                                setStatus("رفض مستقبل وصلة الأمر؛ تحقق من توافق إصدار التطبيقين")
+                            } else if (line == "ACTION_OK") {
+                                setStatus("تم تنفيذ الأمر على التلفاز")
                             } else if (line.startsWith("WASLA-TV/1")) {
                                 setStatus("اتصال وصلة نشط: $ip")
                             }
@@ -1822,6 +2138,21 @@ class MainActivity : Activity() {
     }
 
     private fun sendKey(key: Int) {
+        val waslaKey = when (key) {
+            19 -> "DPAD_UP"
+            20 -> "DPAD_DOWN"
+            21 -> "DPAD_LEFT"
+            22 -> "DPAD_RIGHT"
+            23 -> "SELECT"
+            4 -> "BACK"
+            3 -> "HOME"
+            187 -> "RECENTS"
+            24 -> "VOLUME_UP"
+            25 -> "VOLUME_DOWN"
+            164 -> "MUTE"
+            else -> null
+        }
+        if (waslaKey != null && sendWaslaAction("KEY $waslaKey")) return
         io.execute {
             try {
                 writePacketWithReconnect("KEYEVENT\r\n$key\r\n\r\n")
@@ -1831,9 +2162,117 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun connectWaslaRelay() {
+        if (!relayConnecting.compareAndSet(false, true)) return
+        val base = prefs.getString("relay_base_url", "")?.trim()?.trimEnd('/') ?: ""
+        val deviceId = prefs.getString("wasla_tv_id", "") ?: ""
+        val code = prefs.getString("wasla_tv_code", "") ?: ""
+        if (base.isBlank() || deviceId.isBlank() || !code.matches(Regex("\\d{6}"))) {
+            relayConnecting.set(false)
+            return
+        }
+        val wsBase = when {
+            base.startsWith("https://", true) -> "wss://" + base.substringAfter("://")
+            base.startsWith("wss://", true) -> base
+            else -> {
+                relayConnecting.set(false)
+                setStatus("يجب أن يبدأ عنوان خادم وصلة بـ https:// أو wss://")
+                return
+            }
+        }
+        val request = try {
+            Request.Builder().url("$wsBase/connect/$deviceId")
+                .header("X-Wasla-Role", "mobile")
+                .header("X-Wasla-Pairing-Code", code)
+                .build()
+        } catch (e: Exception) {
+            relayConnecting.set(false)
+            setStatus("عنوان خادم الربط غير صالح")
+            return
+        }
+        relaySocket?.close(1000, "Reconnect")
+        relaySocket = relayClient.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                relayConnecting.set(false)
+                setStatus("اتصال وصلة عبر الإنترنت جاهز")
+            }
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                try {
+                    val msg = JSONObject(text)
+                    when (msg.optString("type")) {
+                        "action_result" -> setStatus(if (msg.optString("result") == "ACTION_OK")
+                            "تم تنفيذ الأمر عبر الإنترنت" else "تعذر تنفيذ الأمر عبر الإنترنت: ${msg.optString("result")}")
+                        "peer-status" -> setStatus("انقطع اتصال مستقبل التلفاز عبر الإنترنت")
+                    }
+                } catch (_: Exception) { }
+            }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (relaySocket === webSocket) relaySocket = null
+                relayConnecting.set(false)
+                setStatus("تعذر الاتصال بخادم وصلة عبر الإنترنت — ستتم إعادة المحاولة")
+                if (!isFinishing) gestureHandler.postDelayed({ connectWaslaRelay() }, 8000L)
+            }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (relaySocket === webSocket) relaySocket = null
+                relayConnecting.set(false)
+                if (!isFinishing && prefs.getString("relay_base_url", "").orEmpty().isNotBlank()) {
+                    gestureHandler.postDelayed({ connectWaslaRelay() }, 5000L)
+                }
+            }
+        })
+    }
+
+    private fun disconnectWaslaRelay() {
+        try { relaySocket?.close(1000, "Relay disabled") } catch (_: Exception) { }
+        relaySocket = null
+    }
+
+    /** Sends an allow-listed action over local TCP or the authenticated WSS relay. */
+    private fun sendWaslaAction(command: String): Boolean {
+        synchronized(waslaTvLock) {
+            val socket = waslaTvSocket
+            val out = waslaTvOutput
+            if (socket != null && out != null && !socket.isClosed && socket.isConnected) {
+                try {
+                    out.write("ACTION $command\n".toByteArray(Charsets.UTF_8))
+                    out.flush()
+                    return true
+                } catch (_: Exception) {
+                    closeWaslaReceiver()
+                }
+            }
+        }
+        val relay = relaySocket ?: return false
+        if (relayMessageId.get() < 0L) return false
+        val payload = JSONObject().put("type", "action")
+            .put("id", relayMessageId.incrementAndGet().toString())
+            .put("command", command).toString()
+        return try { relay.send(payload) } catch (_: Exception) { false }
+    }
+
+    private fun sendWaslaTap(x: Float, y: Float): Boolean {
+        val nx = (x / framebufferWidth.coerceAtLeast(1f) * 10000f).coerceIn(0f, 10000f)
+        val ny = (y / framebufferHeight.coerceAtLeast(1f) * 10000f).coerceIn(0f, 10000f)
+        return sendWaslaAction("TAP ${nx.toInt()} ${ny.toInt()}")
+    }
+
+    private fun sendWaslaSwipe(x1: Float, y1: Float, x2: Float, y2: Float, duration: Long): Boolean {
+        fun norm(value: Float, extent: Float) =
+            (value / extent.coerceAtLeast(1f) * 10000f).coerceIn(0f, 10000f).toInt()
+        return sendWaslaAction(
+            "SWIPE ${norm(x1, framebufferWidth)} ${norm(y1, framebufferHeight)} " +
+                "${norm(x2, framebufferWidth)} ${norm(y2, framebufferHeight)} ${duration.coerceIn(80L, 2000L)}"
+        )
+    }
+
     private fun sendPointerHold(pressed: Boolean) {
         val x = gyroCursorX
         val y = gyroCursorY
+        if (pressed && waslaTvSocket != null) {
+            val nx = (x / framebufferWidth.coerceAtLeast(1f) * 10000f).toInt().coerceIn(0, 10000)
+            val ny = (y / framebufferHeight.coerceAtLeast(1f) * 10000f).toInt().coerceIn(0, 10000)
+            if (sendWaslaAction("LONG_PRESS $nx $ny 700")) return
+        } else if (!pressed && waslaTvSocket != null) return
         val action = if (pressed) 0 else 1
         airMouseIo.execute {
             try {
@@ -1858,6 +2297,11 @@ class MainActivity : Activity() {
     private fun sendText(value: String) {
         val text = value.replace("\r", "").replace("\n", " ")
         if (text.isBlank()) return
+        val encoded = android.util.Base64.encodeToString(text.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+        if (sendWaslaAction("TEXT $encoded")) {
+            setStatus("أُرسل النص إلى مستقبل وصلة")
+            return
+        }
         io.execute {
             try {
                 // EShare keyboard expects composing text followed by a commit.
@@ -1979,6 +2423,9 @@ class MainActivity : Activity() {
         networkCallback = null
         connectionMonitor.shutdownNow()
         closeWaslaReceiver()
+        disconnectWaslaRelay()
+        relayClient.dispatcher.executorService.shutdown()
+        relayClient.connectionPool.evictAll()
         waslaLinkMonitor.shutdownNow()
         waslaLinkExecutor.shutdownNow()
         closeConnection()

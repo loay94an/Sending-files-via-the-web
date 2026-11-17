@@ -1,0 +1,35 @@
+name: Validate Wasla relay worker
+
+on:
+  pull_request:
+    branches: [feat/eshare-text-longpress-reconnect, main]
+    paths:
+      - "worker/**"
+      - "wrangler-wasla.toml"
+      - ".github/workflows/validate-wasla-worker.yml"
+  push:
+    branches: [feat/wasla-functional-receiver-phase1]
+    paths:
+      - "worker/**"
+      - "wrangler-wasla.toml"
+      - ".github/workflows/validate-wasla-worker.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check Worker JavaScript syntax
+        run: node --check worker/wasla-connect.js
+      - name: Validate Wrangler bundle and Durable Object configuration
+        run: npx --yes wrangler@4 deploy --dry-run --config wrangler-wasla.toml
