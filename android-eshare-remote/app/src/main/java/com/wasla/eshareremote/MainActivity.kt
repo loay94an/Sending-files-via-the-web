@@ -812,7 +812,7 @@ class MainActivity : Activity() {
         }
         val x = (event.x * 1280f / view.width.coerceAtLeast(1)).coerceIn(0f, 1280f)
         val y = (event.y * 720f / view.height.coerceAtLeast(1)).coerceIn(0f, 720f)
-        val packet = "SLIDEEVENT\\r\\n0\\r\\n$action\\r\\n[={$x,$y}]\\r\\n\\r\\n"
+        val packet = "SLIDEEVENT\r\n0\r\n$action\r\n[={$x,$y}]\r\n\r\n"
         airMouseIo.execute {
             try {
                 writePointerPacket(packet)
@@ -842,7 +842,7 @@ class MainActivity : Activity() {
                     if (next == null) gyroPositionWriteQueued = false
                     next
                 } ?: break
-                writePointerPacket("GYROSCOPEEVENT\\r\\n${position.first}\\r\\n${position.second}\\r\\n-1\\r\\n\\r\\n")
+                writePointerPacket("GYROSCOPEEVENT\r\n${position.first}\r\n${position.second}\r\n-1\r\n\r\n")
             }
         } catch (e: Exception) {
             synchronized(gyroPositionLock) {
