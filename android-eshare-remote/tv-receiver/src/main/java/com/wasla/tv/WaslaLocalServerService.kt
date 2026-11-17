@@ -7,6 +7,13 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.net.Uri
+import android.util.Base64
+import androidx.documentfile.provider.DocumentFile
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
@@ -22,6 +29,8 @@ class WaslaLocalServerService : Service() {
     private val running = AtomicBoolean(false)
     private val clients = Executors.newCachedThreadPool()
     @Volatile private var listener: ServerSocket? = null
+    @Volatile private var fileListener: ServerSocket? = null
+    @Volatile private var fileAcceptThread: Thread? = null
     @Volatile private var acceptThread: Thread? = null
     private val discoveryRunning = AtomicBoolean(false)
     @Volatile private var discoverySocket: DatagramSocket? = null
@@ -30,6 +39,7 @@ class WaslaLocalServerService : Service() {
         super.onCreate()
         startForeground(NOTIFICATION_ID, buildNotification())
         startServer()
+        startFileServer()
         startDiscoveryResponder()
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -54,6 +64,149 @@ class WaslaLocalServerService : Service() {
             }
         }, "wasla-tv-local-server").apply { isDaemon = true; start() }
     }
+
+    // Separate binary file channel keeps file traffic away from latency-sensitive
+    // remote-control commands. The TV owner selects an allowed folder via SAF.
+    private fun startFileServer() {
+        if (fileListener != null) return
+        fileAcceptThread = Thread({
+            try {
+                val server = ServerSocket(FILE_PORT)
+                server.reuseAddress = true
+                fileListener = server
+                while (running.get()) {
+                    val socket = server.accept()
+                    socket.tcpNoDelay = true
+                    clients.execute { handleFileClient(socket) }
+                }
+            } catch (_: Exception) {
+                // Closed during shutdown or receiver restart.
+            }
+        }, "wasla-tv-file-server").apply { isDaemon = true; start() }
+    }
+
+    private fun selectedFolder(): DocumentFile? {
+        val raw = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("shared_tree_uri", null)
+            ?: return null
+        return try { DocumentFile.fromTreeUri(this, Uri.parse(raw)) } catch (_: Exception) { null }
+    }
+
+    private fun handleFileClient(socket: java.net.Socket) {
+        socket.use { client ->
+            client.soTimeout = 30_000
+            val input = DataInputStream(client.getInputStream())
+            val output = DataOutputStream(client.getOutputStream())
+            val hello = try { input.readUTF() } catch (_: Exception) { return }
+            if (hello != "PAIR ${pairCode(this)}") {
+                output.writeUTF("DENIED"); output.flush(); return
+            }
+            output.writeUTF("OK WASLA-FILES/1"); output.flush()
+            try {
+                when (val command = input.readUTF()) {
+                    "LIST" -> {
+                        val root = selectedFolder()
+                        if (root == null || !root.canRead()) {
+                            output.writeUTF("ERROR FOLDER_NOT_CONFIGURED")
+                        } else {
+                            val rows = JSONArray()
+                            root.listFiles().take(150).forEach { doc ->
+                                rows.put(JSONObject().apply {
+                                    put("id", Base64.encodeToString(doc.uri.toString().toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
+                                    put("name", doc.name ?: "ملف")
+                                    put("mime", doc.type ?: "application/octet-stream")
+                                    put("size", doc.length())
+                                    put("directory", doc.isDirectory)
+                                })
+                            }
+                            val encoded = Base64.encodeToString(rows.toString().toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                            output.writeUTF("FILES $encoded")
+                        }
+                    }
+                    else -> {
+                        val parts = command.split(' ')
+                        when (parts.firstOrNull()) {
+                            "PUT" -> {
+                                if (parts.size != 4) {
+                                    output.writeUTF("ERROR BAD_REQUEST")
+                                } else {
+                                    val name = String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
+                                    val mime = String(Base64.decode(parts[2], Base64.NO_WRAP), Charsets.UTF_8)
+                                    val size = parts[3].toLongOrNull()
+                                    val root = selectedFolder()
+                                    if (root == null || !root.canWrite()) output.writeUTF("ERROR FOLDER_NOT_WRITABLE")
+                                    else if (name.isBlank() || name == "." || name == ".." || name.contains('/') || name.contains('\\') || name.length > 240 ||
+                                        size == null || size !in 0L..MAX_FILE_BYTES) output.writeUTF("ERROR INVALID_FILE")
+                                    else {
+                                        val created = root.createFile(mime.ifBlank { "application/octet-stream" }, name)
+                                        if (created == null) output.writeUTF("ERROR CREATE_FAILED")
+                                        else {
+                                            val target = contentResolver.openOutputStream(created.uri, "w")
+                                            if (target == null) {
+                                                created.delete()
+                                                output.writeUTF("ERROR OPEN_FAILED")
+                                            } else {
+                                                target.use { stream ->
+                                                    val buffer = ByteArray(32 * 1024)
+                                                    var remaining = size
+                                                    while (remaining > 0) {
+                                                        val count = minOf(buffer.size.toLong(), remaining).toInt()
+                                                        input.readFully(buffer, 0, count)
+                                                        stream.write(buffer, 0, count)
+                                                        remaining -= count
+                                                    }
+                                                    stream.flush()
+                                                }
+                                                output.writeUTF("STORED")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            "GET" -> {
+                                if (parts.size != 2) output.writeUTF("ERROR BAD_REQUEST")
+                                else {
+                                    val uriText = String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
+                                    val doc = DocumentFile.fromSingleUri(this, Uri.parse(uriText))
+                                    val size = doc?.length() ?: -1L
+                                    val stream = if (doc?.canRead() == true && size in 0L..MAX_FILE_BYTES) contentResolver.openInputStream(doc.uri) else null
+                                    if (doc == null || stream == null) output.writeUTF("ERROR NOT_READABLE")
+                                    else {
+                                        val mime64 = Base64.encodeToString((doc.type ?: "application/octet-stream").toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                                        val name64 = Base64.encodeToString((doc.name ?: "download.bin").toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                                        output.writeUTF("DATA $size $mime64 $name64")
+                                        stream.use { src ->
+                                            val buffer = ByteArray(32 * 1024)
+                                            var remaining = size
+                                            while (remaining > 0) {
+                                                val count = src.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                                                if (count < 0) throw java.io.EOFException("File shortened during download")
+                                                output.write(buffer, 0, count)
+                                                remaining -= count
+                                            }
+                                        }
+                                        output.flush()
+                                    }
+                                }
+                            }
+                            "DELETE" -> {
+                                if (parts.size != 2) output.writeUTF("ERROR BAD_REQUEST")
+                                else {
+                                    val uriText = String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
+                                    val doc = DocumentFile.fromSingleUri(this, Uri.parse(uriText))
+                                    output.writeUTF(if (doc?.canWrite() == true && doc.delete()) "DELETED" else "ERROR DELETE_FAILED")
+                                }
+                            }
+                            else -> output.writeUTF("ERROR UNKNOWN_COMMAND")
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                try { output.writeUTF("ERROR TRANSFER_FAILED"); output.flush() } catch (_: Exception) { }
+            }
+            output.flush()
+        }
+    }
+
     // LAN discovery is deliberately separate from EShare discovery. The phone
     // broadcasts a short probe; this receiver replies with its stable identity and
     // local endpoint, without exposing the pairing PIN in a broadcast packet.
@@ -191,6 +344,7 @@ class WaslaLocalServerService : Service() {
     override fun onDestroy() {
         running.set(false)
         try { listener?.close() } catch (_: Exception) { }
+        try { fileListener?.close() } catch (_: Exception) { }
         try { discoverySocket?.close() } catch (_: Exception) { }
         discoveryRunning.set(false)
         acceptThread?.interrupt()
@@ -202,6 +356,8 @@ class WaslaLocalServerService : Service() {
     companion object {
         const val PORT = 38471
         const val DISCOVERY_PORT = 38470
+        const val FILE_PORT = 38472
+        private const val MAX_FILE_BYTES = 536870912L
         const val DISCOVERY_REQUEST = "WASLA_DISCOVER/1"
         private const val CHANNEL = "wasla_tv_server"
         private const val NOTIFICATION_ID = 38471
