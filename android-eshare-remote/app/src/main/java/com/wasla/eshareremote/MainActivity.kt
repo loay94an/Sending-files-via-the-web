@@ -30,6 +30,7 @@ class MainActivity : Activity() {
     // Keep pointer traffic off the discovery/key-command executor to avoid input stalls.
     private val airMouseIo = Executors.newSingleThreadExecutor()
     private val airMouseLock = Any()
+    private val socketWriteLock = Any()
     private var pendingAirDx = 0f
     private var pendingAirDy = 0f
     private var airMouseWriteQueued = false
@@ -798,8 +799,8 @@ class MainActivity : Activity() {
     private fun sendAirMouse(dx: Float, dy: Float) {
         if (dx == 0f && dy == 0f) return
         synchronized(airMouseLock) {
-            pendingAirDx = (pendingAirDx + dx).coerceIn(-80f, 80f)
-            pendingAirDy = (pendingAirDy + dy).coerceIn(-80f, 80f)
+            pendingAirDx = (pendingAirDx + dx).coerceIn(-240f, 240f)
+            pendingAirDy = (pendingAirDy + dy).coerceIn(-240f, 240f)
             if (airMouseWriteQueued) return
             airMouseWriteQueued = true
         }
@@ -821,13 +822,15 @@ class MainActivity : Activity() {
             }
             if (delta.first != 0f || delta.second != 0f) {
                 // Dedicated pointer worker prevents discovery/key tasks from delaying cursor packets.
-                // A steady ~50 Hz cadence avoids bursts while keeping motion responsive.
+                // EShare mode-2 AIRMOUSEEVNET is rate-limited to 55 ms; matching it avoids dropped cursor updates.
                 val now = System.currentTimeMillis()
-                val waitMs = 20L - (now - lastAirSendAt)
+                val waitMs = 55L - (now - lastAirSendAt)
                 if (waitMs > 0L) Thread.sleep(waitMs)
                 val packet = "AIRMOUSEEVNET\r\n${delta.first}\r\n${delta.second}\r\n2\r\n\r\n"
-                output?.write(packet.toByteArray(Charsets.UTF_8))
-                output?.flush()
+                synchronized(socketWriteLock) {
+                    output?.write(packet.toByteArray(Charsets.UTF_8))
+                    output?.flush()
+                }
                 lastAirSendAt = System.currentTimeMillis()
             }
         } catch (e: Exception) {
