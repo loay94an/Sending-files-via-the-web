@@ -1,7 +1,11 @@
 package com.wasla.eshareremote
 
 import android.app.Activity
+import android.Manifest
 import android.os.Bundle
+import android.speech.SpeechRecognizer
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
 import android.text.Editable
 import android.text.TextWatcher
 import android.content.Context
@@ -67,6 +71,7 @@ class MainActivity : Activity() {
     private lateinit var connectButton: Button
     private lateinit var textInput: EditText
     private var suppressTextWatcher = false
+    private var speechRecognizer: SpeechRecognizer? = null
     private val prefs by lazy { getSharedPreferences("remote", Context.MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -543,19 +548,7 @@ class MainActivity : Activity() {
         }
         val voice = makeButton("🎙  التحكم الصوتي", 58).apply {
             textSize = 14f
-            setOnClickListener {
-                try {
-                    val intent = Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                        putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                            android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                        putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "ar")
-                        putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "قل أمراً للتحكم بالتلفاز")
-                    }
-                    startActivityForResult(intent, 701)
-                } catch (_: Exception) {
-                    setStatus("ميزة التعرف الصوتي غير متاحة على هذا الهاتف")
-                }
-            }
+            setOnClickListener { startVoiceRecognition() }
         }
         bottom.addView(voice, LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginEnd = dp(5) })
         val airToggle = makeButton("⌁  الماوس الهوائي", 58, true).apply {
@@ -599,42 +592,95 @@ class MainActivity : Activity() {
             }
             startActivity(Intent.createChooser(share, "إرسال الملف إلى تطبيق على التلفاز"))
             setStatus("اختر تطبيق استقبال الملفات على التلفاز إن كان مثبتاً")
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 703) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                beginSpeechRecognition()
+            } else {
+                setStatus("يجب السماح باستخدام الميكروفون لتشغيل التحكم الصوتي")
+            }
+        }
+    }
+
+    private fun startVoiceRecognition() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 703)
             return
         }
-        if (requestCode != 701 || resultCode != RESULT_OK) return
-        val spoken = data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
-            ?.firstOrNull()?.trim()?.lowercase(java.util.Locale("ar")) ?: return
-        when {
-            spoken.contains("الرئيسية") || spoken.contains("هوم") -> sendKey(3)
-            spoken.contains("رجوع") || spoken.contains("عودة") -> sendKey(4)
-            spoken.contains("يمين") -> sendKey(22)
-            spoken.contains("يسار") -> sendKey(21)
-            spoken.contains("فوق") || spoken.contains("أعلى") -> sendKey(19)
-            spoken.contains("تحت") || spoken.contains("أسفل") -> sendKey(20)
-            spoken.contains("موافق") || spoken.contains("اختيار") -> sendKey(23)
-            spoken.contains("ارفع الصوت") || spoken.contains("الصوت أعلى") -> sendKey(24)
-            spoken.contains("اخفض الصوت") || spoken.contains("الصوت أقل") -> sendKey(25)
-            spoken.contains("كتم") -> sendKey(164)
-            spoken.contains("طاقة") || spoken.contains("إيقاف") -> sendKey(26)
-            spoken.contains("افتح المساعد الصوتي") || spoken.contains("شغل المساعد الصوتي") ||
-                spoken.contains("البحث الصوتي") -> sendKey(231)
-            spoken.startsWith("ابحث في يوتيوب عن ") -> {
-                val query = spoken.removePrefix("ابحث في يوتيوب عن ").trim()
-                if (query.isNotBlank()) {
-                    // Open the app's search UI, then enter the recognized Arabic query.
-                    sendKey(84) // KEYCODE_SEARCH
-                    gestureHandler.postDelayed({ sendComposingText(0, query); sendText(query) }, 700L)
+        beginSpeechRecognition()
+    }
+
+    private fun beginSpeechRecognition() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            setStatus("خدمة التعرف الصوتي غير متاحة على الهاتف")
+            return
+        }
+        try {
+            speechRecognizer?.destroy()
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+            speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) { setStatus("🎙 أستمع الآن… تكلّم") }
+                override fun onBeginningOfSpeech() { setStatus("أسمع صوتك…") }
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() { setStatus("جارٍ تحويل الكلام إلى نص…") }
+                override fun onError(error: Int) {
+                    val message = when (error) {
+                        SpeechRecognizer.ERROR_AUDIO -> "تعذر تشغيل الميكروفون"
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "إذن الميكروفون غير متاح"
+                        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "خدمة التعرف الصوتي تحتاج إلى اتصال"
+                        SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "لم ألتقط كلاماً واضحاً؛ حاول مجدداً"
+                        else -> "تعذر التعرف على الكلام، رمز الخطأ: " + error
+                    }
+                    setStatus(message)
                 }
+                override fun onResults(results: Bundle?) {
+                    val spoken = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()
+                    if (spoken.isNullOrBlank()) setStatus("لم ألتقط أي كلام") else processSpokenText(spoken)
+                }
+                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar")
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             }
-            spoken.startsWith("ابحث عن ") -> {
-                val query = spoken.removePrefix("ابحث عن ").trim()
+            speechRecognizer?.startListening(intent)
+        } catch (e: Exception) {
+            setStatus("تعذر بدء الميكروفون: " + (e.message ?: "خدمة الصوت غير جاهزة"))
+        }
+    }
+
+    private fun processSpokenText(raw: String) {
+        val spoken = raw.trim()
+        val command = spoken.lowercase(java.util.Locale("ar"))
+        when {
+            command.contains("الرئيسية") || command.contains("هوم") -> sendKey(3)
+            command.contains("رجوع") || command.contains("عودة") -> sendKey(4)
+            command.contains("يمين") -> sendKey(22)
+            command.contains("يسار") -> sendKey(21)
+            command.contains("فوق") || command.contains("أعلى") -> sendKey(19)
+            command.contains("تحت") || command.contains("أسفل") -> sendKey(20)
+            command.contains("موافق") || command.contains("اختيار") -> sendKey(23)
+            command.contains("ارفع الصوت") || command.contains("الصوت أعلى") -> sendKey(24)
+            command.contains("اخفض الصوت") || command.contains("الصوت أقل") -> sendKey(25)
+            command.contains("كتم") -> sendKey(164)
+            command.contains("طاقة") || command.contains("إيقاف") -> sendKey(26)
+            command.contains("افتح المساعد الصوتي") || command.contains("شغل المساعد الصوتي") -> sendKey(231)
+            command.startsWith("ابحث في يوتيوب عن ") || command.startsWith("ابحث عن ") -> {
+                val query = spoken.substringAfter("عن ").trim()
                 if (query.isNotBlank()) {
                     sendKey(84)
-                    gestureHandler.postDelayed({ sendText(query) }, 700L)
+                    gestureHandler.postDelayed({ sendComposingText(0, query); sendText(query) }, 900L)
                 }
             }
             else -> {
-                // Anything that is not a remote-control command is treated as dictated text.
                 sendComposingText(0, spoken)
                 sendText(spoken)
             }
@@ -1218,6 +1264,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        speechRecognizer?.destroy()
+        speechRecognizer = null
         gestureHandler.removeCallbacksAndMessages(null)
         connectionMonitor.shutdownNow()
         closeConnection()
