@@ -99,7 +99,7 @@ class WaslaLocalServerService : Service() {
                 val response = when {
                     line == "PING" -> "PONG"
                     line == "INFO" -> "WASLA-TV/1 ${deviceId(this)} ${localIpv4()}"
-                    line.startsWith("ACTION ") -> "ACTION_RECEIVED"
+                    line.startsWith("ACTION ") -> executeAction(line.removePrefix("ACTION ").trim())
                     else -> "UNKNOWN_COMMAND"
                 }
                 writer.write(response + "\n")
@@ -107,6 +107,52 @@ class WaslaLocalServerService : Service() {
             }
         }
     }
+
+    /**
+     * Executes only a small, explicit command allow-list. Arbitrary shell commands,
+     * component names and package launches are intentionally not accepted.
+     */
+    private fun executeAction(command: String): String {
+        val p = command.split(Regex("\\s+"))
+        if (p.isEmpty()) return "BAD_ACTION"
+        val ok = try {
+            when (p[0]) {
+                "KEY" -> p.size == 2 && WaslaAccessibilityService.key(p[1])
+                "TAP" -> {
+                    if (p.size != 3) false else {
+                        val x = p[1].toFloat()
+                        val y = p[2].toFloat()
+                        val metrics = resources.displayMetrics
+                        if (x < 0f || y < 0f || x >= metrics.widthPixels || y >= metrics.heightPixels) false
+                        else WaslaAccessibilityService.tap(x, y)
+                    }
+                }
+                "SWIPE" -> {
+                    if (p.size != 6) false else {
+                        val x1 = p[1].toFloat(); val y1 = p[2].toFloat()
+                        val x2 = p[3].toFloat(); val y2 = p[4].toFloat()
+                        val duration = p[5].toLong()
+                        val metrics = resources.displayMetrics
+                        val valid = listOf(x1, y1, x2, y2).all { it >= 0f } &&
+                            x1 < metrics.widthPixels && x2 < metrics.widthPixels &&
+                            y1 < metrics.heightPixels && y2 < metrics.heightPixels &&
+                            duration in 80L..2000L
+                        valid && WaslaAccessibilityService.swipe(x1, y1, x2, y2, duration)
+                    }
+                }
+                "TEXT" -> {
+                    if (p.size != 2 || p[1].length > 11000) false else {
+                        val bytes = android.util.Base64.decode(p[1], android.util.Base64.NO_WRAP)
+                        if (bytes.size > 8192) false
+                        else WaslaAccessibilityService.setText(String(bytes, Charsets.UTF_8))
+                    }
+                }
+                else -> false
+            }
+        } catch (_: Exception) { false }
+        return if (ok) "ACTION_OK" else if (!WaslaAccessibilityService.isEnabled()) "ACTION_UNAVAILABLE" else "BAD_ACTION"
+    }
+
     private fun buildNotification(): Notification {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(
