@@ -40,6 +40,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.net.HttpURLConnection
+import java.net.URL
+import org.json.JSONObject
 
 class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
@@ -219,6 +222,14 @@ class MainActivity : Activity() {
             setOnClickListener { sendKey(26) }
         }
         header.addView(power, LinearLayout.LayoutParams(dp(72), dp(58)))
+        val settingsButton = makeButton("⚙", 48).apply {
+            textSize = 20f
+            contentDescription = "إعدادات وصلة"
+            setOnClickListener { showSettingsDialog() }
+        }
+        header.addView(settingsButton, LinearLayout.LayoutParams(dp(48), dp(58)).apply {
+            marginStart = dp(4)
+        })
         root.addView(header, lp(-1, dp(72)))
 
         // Phone keyboard input sits above the sharing and file-transfer shortcuts.
@@ -634,6 +645,115 @@ class MainActivity : Activity() {
         root.addView(bottom, LinearLayout.LayoutParams(-1, dp(50)).apply { topMargin = dp(3); bottomMargin = dp(5) })
 
         setContentView(root)
+    }
+
+    private fun showSettingsDialog() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(4))
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
+        val airLabel = TextView(this).apply { textSize = 15f; setTextColor(0xff15243a.toInt()) }
+        val airSeek = SeekBar(this).apply {
+            max = 2000
+            progress = ((prefs.getFloat("air_mouse_sensitivity", 1498f) - 500f).toInt()).coerceIn(0, 2000)
+        }
+        airLabel.text = "حساسية الماوس الهوائي: \${500 + airSeek.progress}"
+        airSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                airLabel.text = "حساسية الماوس الهوائي: \${500 + progress}"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
+        val touchLabel = TextView(this).apply { textSize = 15f; setTextColor(0xff15243a.toInt()) }
+        val touchSeek = SeekBar(this).apply {
+            max = 20
+            progress = ((prefs.getFloat("touchpad_sensitivity", 1.0f) - 0.5f) * 10f).toInt().coerceIn(0, 20)
+        }
+        touchLabel.text = "حساسية لوحة اللمس: \${"%.1f".format(java.util.Locale.US, 0.5f + touchSeek.progress / 10f)}×"
+        touchSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                touchLabel.text = "حساسية لوحة اللمس: \${"%.1f".format(java.util.Locale.US, 0.5f + progress / 10f)}×"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
+        content.addView(airLabel)
+        content.addView(airSeek, LinearLayout.LayoutParams(-1, dp(44)))
+        content.addView(touchLabel)
+        content.addView(touchSeek, LinearLayout.LayoutParams(-1, dp(44)))
+        AlertDialog.Builder(this)
+            .setTitle("إعدادات وصلة")
+            .setView(content)
+            .setNegativeButton("إلغاء", null)
+            .setPositiveButton("حفظ") { _, _ ->
+                prefs.edit()
+                    .putFloat("air_mouse_sensitivity", (500 + airSeek.progress).toFloat())
+                    .putFloat("touchpad_sensitivity", 0.5f + touchSeek.progress / 10f)
+                    .apply()
+                setStatus("تم حفظ إعدادات حساسية المؤشر")
+            }
+            .setNeutralButton("تحديث التطبيق") { _, _ -> checkForUpdates() }
+            .show()
+    }
+
+    private fun checkForUpdates() {
+        setStatus("جارٍ التحقق من تحديث وصلة...")
+        Thread({
+            var latestVersion = ""
+            var downloadUrl = "https://github.com/loay94an/wasla/releases/latest"
+            var errorMessage: String? = null
+            try {
+                val connection = (URL("https://api.github.com/repos/loay94an/wasla/releases/latest").openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 7000
+                    readTimeout = 7000
+                    requestMethod = "GET"
+                    setRequestProperty("Accept", "application/vnd.github+json")
+                    setRequestProperty("User-Agent", "Wasla-Android")
+                }
+                try {
+                    if (connection.responseCode == 200) {
+                        val release = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                        latestVersion = release.optString("tag_name", "").removePrefix("v")
+                        val assets = release.optJSONArray("assets")
+                        if (assets != null) {
+                            for (i in 0 until assets.length()) {
+                                val asset = assets.optJSONObject(i) ?: continue
+                                if (asset.optString("name").startsWith("wasla-eshare-remote") &&
+                                    asset.optString("name").endsWith(".apk")) {
+                                    downloadUrl = asset.optString("browser_download_url", downloadUrl)
+                                    break
+                                }
+                            }
+                        }
+                    } else {
+                        errorMessage = "لا توجد نسخة منشورة بعد أو تعذر الوصول إلى صفحة الإصدارات."
+                    }
+                } finally { connection.disconnect() }
+            } catch (_: Exception) {
+                errorMessage = "تعذر الاتصال بخدمة التحديث. تحقق من الإنترنت وحاول مجدداً."
+            }
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                val current = BuildConfig.VERSION_NAME.removePrefix("v")
+                val hasNew = latestVersion.isNotBlank() && latestVersion != current
+                val message = when {
+                    errorMessage != null -> errorMessage!!
+                    hasNew -> "تتوفر نسخة أحدث: $latestVersion\nالإصدار المثبت: $current"
+                    else -> "أنت تستخدم أحدث إصدار منشور ($current)."
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("تحديث وصلة")
+                    .setMessage(message)
+                    .setPositiveButton(if (hasNew) "تنزيل التحديث" else "فتح صفحة الإصدارات") { _, _ ->
+                        try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(downloadUrl))) }
+                        catch (_: Exception) { setStatus("تعذر فتح رابط التحديث") }
+                    }
+                    .setNegativeButton("إغلاق", null)
+                    .show()
+            }
+        }, "wasla-update-check").start()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -1339,8 +1459,9 @@ class MainActivity : Activity() {
             val rateY = if (kotlin.math.abs(event.values[0]) < 0.008f) 0f else event.values[0]
             // Increase cursor travel while retaining time-based integration so
             // sensitivity stays consistent across different sensor sample rates.
-            val targetDx = -rateX * dt * 1498f
-            val targetDy = -rateY * dt * 1498f
+            val sensitivity = prefs.getFloat("air_mouse_sensitivity", 1498f).coerceIn(500f, 2500f)
+            val targetDx = -rateX * dt * sensitivity
+            val targetDy = -rateY * dt * sensitivity
             // Faster response with enough filtering to avoid a jittery pointer.
             smoothedGyroDx += (targetDx - smoothedGyroDx) * 0.65f
             smoothedGyroDy += (targetDy - smoothedGyroDy) * 0.65f
@@ -1374,8 +1495,9 @@ class MainActivity : Activity() {
         pendingTouchDx = 0f
         pendingTouchDy = 0f
         if (moveDx == 0f && moveDy == 0f) return
-        val scaledX = moveDx * framebufferWidth * 1.0f / viewWidth.coerceAtLeast(1)
-        val scaledY = moveDy * framebufferHeight * 1.0f / viewHeight.coerceAtLeast(1)
+        val touchSensitivity = prefs.getFloat("touchpad_sensitivity", 1.0f).coerceIn(0.5f, 2.5f)
+        val scaledX = moveDx * framebufferWidth * touchSensitivity / viewWidth.coerceAtLeast(1)
+        val scaledY = moveDy * framebufferHeight * touchSensitivity / viewHeight.coerceAtLeast(1)
         gyroCursorX = (gyroCursorX + scaledX).coerceIn(0f, framebufferWidth)
         gyroCursorY = (gyroCursorY + scaledY).coerceIn(0f, framebufferHeight)
         sendGyroPosition(gyroCursorX, gyroCursorY)
