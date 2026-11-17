@@ -616,7 +616,27 @@ class MainActivity : Activity() {
             spoken.contains("اخفض الصوت") || spoken.contains("الصوت أقل") -> sendKey(25)
             spoken.contains("كتم") -> sendKey(164)
             spoken.contains("طاقة") || spoken.contains("إيقاف") -> sendKey(26)
-            else -> setStatus("لم أفهم الأمر: $spoken")
+            spoken.contains("افتح المساعد الصوتي") || spoken.contains("شغل المساعد الصوتي") ||
+                spoken.contains("البحث الصوتي") -> sendKey(231)
+            spoken.startsWith("ابحث في يوتيوب عن ") -> {
+                val query = spoken.removePrefix("ابحث في يوتيوب عن ").trim()
+                if (query.isNotBlank()) {
+                    // Open the app's search UI, then enter the recognized Arabic query.
+                    sendKey(84) // KEYCODE_SEARCH
+                    gestureHandler.postDelayed({ sendText(query) }, 700L)
+                }
+            }
+            spoken.startsWith("ابحث عن ") -> {
+                val query = spoken.removePrefix("ابحث عن ").trim()
+                if (query.isNotBlank()) {
+                    sendKey(84)
+                    gestureHandler.postDelayed({ sendText(query) }, 700L)
+                }
+            }
+            else -> {
+                // Anything that is not a remote-control command is treated as dictated text.
+                sendText(spoken)
+            }
         }
     }
 
