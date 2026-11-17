@@ -3,11 +3,17 @@ package com.wasla.tv
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.PixelFormat
 import android.media.AudioManager
 import android.os.Bundle
 import android.os.Build
 import android.util.Base64
 import android.view.View
+import android.view.Gravity
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -19,10 +25,68 @@ class WaslaAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onInterrupt() = Unit
 
-    override fun onServiceConnected() { instance = this }
+    @Volatile private var pointerOverlay: PointerOverlay? = null
+    @Volatile private var pointerWindowManager: WindowManager? = null
+
+    override fun onServiceConnected() {
+        instance = this
+        try {
+            val manager = getSystemService(WINDOW_SERVICE) as WindowManager
+            val overlay = PointerOverlay(this)
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+            ).apply { gravity = Gravity.TOP or Gravity.START }
+            manager.addView(overlay, params)
+            pointerWindowManager = manager
+            pointerOverlay = overlay
+        } catch (_: Exception) {
+            pointerOverlay = null
+            pointerWindowManager = null
+        }
+    }
+
     override fun onDestroy() {
+        try { pointerOverlay?.let { pointerWindowManager?.removeView(it) } } catch (_: Exception) { }
+        pointerOverlay = null
+        pointerWindowManager = null
         if (instance === this) instance = null
         super.onDestroy()
+    }
+
+    private class PointerOverlay(context: android.content.Context) : View(context) {
+        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(35, 205, 255); style = Paint.Style.FILL }
+        private val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 3.5f
+        }
+        @Volatile private var pointerX = 80f
+        @Volatile private var pointerY = 80f
+        @Volatile private var visible = false
+
+        fun moveTo(x: Float, y: Float) {
+            pointerX = x.coerceIn(0f, width.coerceAtLeast(1).toFloat())
+            pointerY = y.coerceIn(0f, height.coerceAtLeast(1).toFloat())
+            visible = true
+            postInvalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            if (!visible) return
+            canvas.drawCircle(pointerX, pointerY, 13f, fill)
+            canvas.drawCircle(pointerX, pointerY, 17f, outline)
+        }
+    }
+
+    fun movePointer(x: Float, y: Float): Boolean {
+        val overlay = pointerOverlay ?: return false
+        overlay.post { overlay.moveTo(x, y) }
+        return true
     }
 
     fun tap(x: Float, y: Float): Boolean {
@@ -108,6 +172,7 @@ class WaslaAccessibilityService : AccessibilityService() {
         fun longPress(x: Float, y: Float, duration: Long): Boolean =
             instance?.longPress(x, y, duration) ?: false
         fun setText(value: String): Boolean = instance?.setFocusedText(value) ?: false
+        fun movePointer(x: Float, y: Float): Boolean = instance?.movePointer(x, y) ?: false
         fun key(name: String): Boolean = instance?.key(name) ?: false
     }
 }
