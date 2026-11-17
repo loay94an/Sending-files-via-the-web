@@ -339,7 +339,7 @@ class WaslaLocalServerService : Service() {
                                     val root = selectedFolder()
                                     val doc = root?.let { findSharedDocument(uri, it) }
                                     val parent = root?.let { findParentOf(uri, it) }
-                                    val valid = name.isNotBlank() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\\\') && name.length <= 240
+                                    val valid = name.isNotBlank() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\') && name.length <= 240
                                     output.writeUTF(if (valid && doc?.canWrite() == true && parent?.findFile(name) == null && doc.renameTo(name)) "RENAMED" else "ERROR RENAME_FAILED")
                                 }
                             }
