@@ -229,32 +229,42 @@ class MainActivity : Activity() {
                     downX = event.x; downY = event.y
                     lastTouchX = event.x; lastTouchY = event.y
                     moved = false
-                    sendTouchMouseEvent(0f, 0f, 0)
+                    // Do not send synthetic mouse-down/up packets here: on some
+                    // EShare builds those reset the relative pointer to screen center.
                     true
                 }
                 android.view.MotionEvent.ACTION_MOVE -> {
                     val totalDx = event.x - downX
                     val totalDy = event.y - downY
-                    if (kotlin.math.abs(totalDx) + kotlin.math.abs(totalDy) > dp(1)) moved = true
+                    val moveThreshold = if (airMouseEnabled) dp(18) else dp(1)
+                    if (kotlin.math.abs(totalDx) + kotlin.math.abs(totalDy) > moveThreshold) moved = true
                     val dx = event.x - lastTouchX
                     val dy = event.y - lastTouchY
                     lastTouchX = event.x
                     lastTouchY = event.y
-                    if (moved && (dx != 0f || dy != 0f)) {
+                    if (!airMouseEnabled && moved && (dx != 0f || dy != 0f)) {
                         sendTouchMouseEvent(dx, dy, 2, view.width, view.height)
                     }
                     true
                 }
                 android.view.MotionEvent.ACTION_UP -> {
-                    sendTouchMouseEvent(0f, 0f, 1)
-                    if (!moved) sendKey(23)
+                    val totalDx = event.x - downX
+                    val totalDy = event.y - downY
+                    if (airMouseEnabled && moved) {
+                        // In air-mouse mode the pad becomes a directional navigator.
+                        if (kotlin.math.abs(totalDx) >= kotlin.math.abs(totalDy)) {
+                            sendKey(if (totalDx >= 0f) 22 else 21)
+                        } else {
+                            sendKey(if (totalDy >= 0f) 20 else 19)
+                        }
+                    } else if (!moved || airMouseEnabled) {
+                        // A tap is always OK/select in either mode.
+                        sendKey(23)
+                    }
                     view.performClick()
                     true
                 }
-                android.view.MotionEvent.ACTION_CANCEL -> {
-                    sendTouchMouseEvent(0f, 0f, 1)
-                    true
-                }
+                android.view.MotionEvent.ACTION_CANCEL -> true
                 else -> true
             }
         }
@@ -451,8 +461,18 @@ class MainActivity : Activity() {
             setOnClickListener {
                 airMouseEnabled = !airMouseEnabled
                 text = if (airMouseEnabled) "إيقاف الماوس الهوائي" else "⌁  الماوس الهوائي"
+                touchHint.text = if (airMouseEnabled) {
+                    "✥\nلوحة الاتجاهات\nاسحب للتنقل • اضغط للموافقة"
+                } else {
+                    "⌖\nلوحة اللمس\nاسحب لتحريك المؤشر واضغط للاختيار"
+                }
+                touchPad.contentDescription = if (airMouseEnabled) {
+                    "لوحة اتجاهات للتنقل والضغط للموافقة أثناء تشغيل الماوس الهوائي"
+                } else {
+                    "لوحة لمس لتحريك مؤشر التلفاز"
+                }
                 if (airMouseEnabled) startAirMouse() else stopAirMouse()
-                setStatus(if (airMouseEnabled) "الماوس الهوائي مفعّل" else "التحكم بلوحة اللمس")
+                setStatus(if (airMouseEnabled) "الماوس الهوائي مفعّل — اللوحة للتنقل والاختيار" else "التحكم بلوحة اللمس")
             }
         }
         bottom.addView(airToggle, LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginStart = dp(5) })
