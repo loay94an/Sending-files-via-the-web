@@ -3,9 +3,6 @@ package com.wasla.eshareremote
 import android.app.Activity
 import android.Manifest
 import android.os.Bundle
-import android.os.Environment
-import android.speech.SpeechRecognizer
-import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.text.Editable
 import android.text.TextWatcher
@@ -25,9 +22,6 @@ import android.os.Looper
 import android.view.View
 import android.widget.*
 import java.io.OutputStream
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.ServerSocket
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -63,8 +57,6 @@ class MainActivity : Activity() {
     private var pendingTouchDy = 0f
     private var tcp: Socket? = null
     private var output: OutputStream? = null
-    private var localHttpServer: ServerSocket? = null
-    private var localHttpPort: Int = 0
     private var discoveryLock: WifiManager.MulticastLock? = null
     private lateinit var sensorManager: SensorManager
     private var gyroSensor: Sensor? = null
@@ -77,7 +69,6 @@ class MainActivity : Activity() {
     private lateinit var connectButton: Button
     private lateinit var textInput: EditText
     private var suppressTextWatcher = false
-    private var speechRecognizer: SpeechRecognizer? = null
     private val prefs by lazy { getSharedPreferences("remote", Context.MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -94,7 +85,6 @@ class MainActivity : Activity() {
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         buildUi()
-        startLocalHttpServer()
         val saved = prefs.getString("ip", "") ?: ""
         ipInput.setText(saved)
         discoverAndConnect()
@@ -232,7 +222,7 @@ class MainActivity : Activity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
                 if (!suppressTextWatcher) {
-                    sendComposingText(previousTextLength, s?.toString().orEmpty())
+                    sendComposingText(0, s?.toString().orEmpty())
                 }
             }
         })
@@ -621,46 +611,51 @@ class MainActivity : Activity() {
         beginSpeechRecognition()
     }
 
+    // Use Android's installed speech-recognition activity. It owns microphone
+    // startup and service selection, and is more compatible across Android devices
+    // than creating a recognizer service directly inside this activity.
     private fun beginSpeechRecognition() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            setStatus("خدمة التعرف الصوتي غير متاحة على الهاتف")
-            return
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-JO")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ar-JO")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "تحدث الآن للتحكم بالتلفاز")
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         }
         try {
-            speechRecognizer?.destroy()
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
-            speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) { setStatus("🎙 أستمع الآن… تكلّم") }
-                override fun onBeginningOfSpeech() { setStatus("أسمع صوتك…") }
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { setStatus("جارٍ تحويل الكلام إلى نص…") }
-                override fun onError(error: Int) {
-                    val message = when (error) {
-                        SpeechRecognizer.ERROR_AUDIO -> "تعذر تشغيل الميكروفون"
-                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "إذن الميكروفون غير متاح"
-                        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "خدمة التعرف الصوتي تحتاج إلى اتصال"
-                        SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "لم ألتقط كلاماً واضحاً؛ حاول مجدداً"
-                        else -> "تعذر التعرف على الكلام، رمز الخطأ: " + error
-                    }
-                    setStatus(message)
-                }
-                override fun onResults(results: Bundle?) {
-                    val spoken = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()
-                    if (spoken.isNullOrBlank()) setStatus("لم ألتقط أي كلام") else processSpokenText(spoken)
-                }
-                override fun onPartialResults(partialResults: Bundle?) {}
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar")
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            }
-            speechRecognizer?.startListening(intent)
+            setStatus("🎙 جارٍ فتح الميكروفون…")
+            startActivityForResult(intent, 701)
         } catch (e: Exception) {
-            setStatus("تعذر بدء الميكروفون: " + (e.message ?: "خدمة الصوت غير جاهزة"))
+            setStatus("لا توجد خدمة إدخال صوتي متاحة: ${e.message ?: "تحقق من تطبيق Google"}")
+        }
+    }
+
+    @Deprecated("Deprecated in Android API; retained for speech-recognition activity result")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 701) return
+        if (resultCode != RESULT_OK) {
+            setStatus("تم إلغاء الاستماع أو لم يصل رد من خدمة الصوت")
+            return
+        }
+        val spoken = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            ?.firstOrNull()?.trim()
+        if (spoken.isNullOrBlank()) {
+            setStatus("لم يتم التعرف على الكلام؛ حاول مجدداً")
+        } else {
+            setStatus("تم التعرف: $spoken")
+            processSpokenText(spoken)
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 703) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                beginSpeechRecognition()
+            } else {
+                setStatus("يجب السماح باستخدام الميكروفون لتشغيل التحكم الصوتي")
+            }
         }
     }
 
@@ -970,91 +965,21 @@ class MainActivity : Activity() {
         }
     }
 
+    // Keep the same direct EShare TCP session used by the earlier working remote.
+    // Do not run optional feature negotiation/auth here: on several EShare builds
+    // those reads consume the following replies and leave the control channel out of sync.
     private fun connect(device: Device) = synchronized(connectionLock) {
         closeConnection()
         val socket = Socket()
         socket.connect(InetSocketAddress(device.ip, device.port), 4000)
+        socket.tcpNoDelay = true
         tcp = socket
         output = socket.getOutputStream()
-        // Match the original EShare client session setup before sending commands.
-        try {
-            socket.soTimeout = 1000
-            socket.tcpNoDelay = true
-            readHandshakeReply(socket, "getFeatures\r\nBoxlightPro\r\n\r\n")
-            val rootPath = Environment.getExternalStorageDirectory().absolutePath
-            socket.getOutputStream().write(("auth\r\n" + rootPath + " " + localHttpPort + " onelong\r\n\r\n").toByteArray(Charsets.UTF_8))
-            socket.getOutputStream().flush()
-            readHandshakeReply(socket, "getServerInfo\r\n1\r\n\r\n")
-            val fb = readHandshakeReply(socket, "GETFBINFO\r\n1\r\n\r\n")
-            val values = Regex("\\d+").findAll(fb).mapNotNull { it.value.toIntOrNull() }.toList()
-            if (values.size >= 2 && values[0] in 320..16384 && values[1] in 240..16384) {
-                framebufferWidth = values[0].toFloat()
-                framebufferHeight = values[1].toFloat()
-            }
-        } catch (e: Exception) {
-            setStatus("تعذر تهيئة جلسة EShare: " + (e.message ?: "خطأ في المصادقة"))
-        } finally {
-            try { socket.soTimeout = 500 } catch (_: Exception) { }
-        }
+        prefs.edit().putString("ip", device.ip).putInt("port", device.port).apply()
         gyroCursorX = framebufferWidth / 2f
         gyroCursorY = framebufferHeight / 2f
-        prefs.edit().putString("ip", device.ip).putInt("port", device.port).apply()
         startSocketReader(socket)
         setStatus("متصل: ${device.name} — ${device.ip}:${device.port}")
-    }
-
-    private fun readHandshakeReply(socket: Socket, packet: String): String {
-        socket.getOutputStream().write(packet.toByteArray(Charsets.UTF_8))
-        socket.getOutputStream().flush()
-        return try {
-            val bytes = ByteArray(2048)
-            val count = socket.getInputStream().read(bytes)
-            if (count > 0) String(bytes, 0, count, Charsets.UTF_8) else ""
-        } catch (_: java.net.SocketTimeoutException) {
-            ""
-        }
-    }
-
-    private fun startLocalHttpServer() {
-        if (localHttpServer != null) return
-        try {
-            var server: ServerSocket? = null
-            for (port in 8888..8900) {
-                try {
-                    server = ServerSocket(port)
-                    break
-                } catch (_: Exception) { }
-            }
-            val activeServer = server ?: throw IllegalStateException("No local callback port available")
-            localHttpServer = activeServer
-            localHttpPort = activeServer.localPort
-            Thread {
-                while (!activeServer.isClosed) {
-                    try {
-                        val client = activeServer.accept()
-                        Thread {
-                            client.use { connection ->
-                                try {
-                                    connection.soTimeout = 1500
-                                    val reader = BufferedReader(InputStreamReader(connection.getInputStream(), Charsets.UTF_8))
-                                    while (true) {
-                                        val line = reader.readLine() ?: break
-                                        if (line.isEmpty()) break
-                                    }
-                                    val response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                                    connection.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
-                                    connection.getOutputStream().flush()
-                                } catch (_: Exception) { }
-                            }
-                        }.start()
-                    } catch (_: Exception) {
-                        break
-                    }
-                }
-            }.apply { name = "Wasla-EShare-Callback"; isDaemon = true; start() }
-        } catch (e: Exception) {
-            setStatus("تعذر تشغيل خدمة الاتصال المحلية: " + (e.message ?: "خطأ"))
-        }
     }
 
     private fun startAirMouse() {
@@ -1323,10 +1248,6 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        speechRecognizer?.destroy()
-        speechRecognizer = null
-        try { localHttpServer?.close() } catch (_: Exception) { }
-        localHttpServer = null
         gestureHandler.removeCallbacksAndMessages(null)
         connectionMonitor.shutdownNow()
         closeConnection()
