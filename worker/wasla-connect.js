@@ -16,7 +16,7 @@ async function sha256(value) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const match = url.pathname.match(/^\\/connect\\/([0-9a-f-]{36})$/i);
+    const match = url.pathname.match(/^\/connect\/([0-9a-f-]{36})$/i);
     if (!match || !DEVICE_ID.test(match[1])) return new Response("Wasla Connect relay", { status: 404 });
     if (url.protocol !== "https:" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Secure WebSocket upgrade required", { status: 426 });
