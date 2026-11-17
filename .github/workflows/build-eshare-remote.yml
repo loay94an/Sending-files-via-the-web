@@ -50,6 +50,6 @@ jobs:
       - name: Upload TV receiver APK
         uses: actions/upload-artifact@v4
         with:
-          name: wasla-tv-receiver-0.1.0
+          name: wasla-tv-receiver-0.1.1-qr
           path: android-eshare-remote/tv-receiver/build/outputs/apk/debug/tv-receiver-debug.apk
           if-no-files-found: error
