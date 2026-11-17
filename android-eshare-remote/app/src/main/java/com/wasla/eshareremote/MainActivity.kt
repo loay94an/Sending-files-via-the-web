@@ -847,7 +847,7 @@ class MainActivity : Activity() {
         // injects touch input and does not drive the visible remote mouse cursor.
         val scaledX = dx * framebufferWidth / viewWidth.coerceAtLeast(1)
         val scaledY = dy * framebufferHeight / viewHeight.coerceAtLeast(1)
-        val packet = "AIRMOUSEEVNET\\r\\n$scaledX\\r\\n$scaledY\\r\\n$action\\r\\n\\r\\n"
+        val packet = "AIRMOUSEEVNET\r\n$scaledX\r\n$scaledY\r\n$action\r\n\r\n"
         airMouseIo.execute {
             try {
                 writePointerPacket(packet)
