@@ -888,13 +888,15 @@ class MainActivity : Activity() {
     }
 
     private fun sendPointerClick() {
-        // EShare absolute-pointer protocol uses action -1 for movement,
-        // 0 for mouse-down, and 1 for mouse-up. Keep the click on the same
-        // absolute framebuffer coordinates as the visible pointer.
+        // EShare uses action 2 to position/move the absolute pointer,
+        // action 0 for press, and action 1 for release. Re-send the exact
+        // current coordinates immediately before the click to avoid stale
+        // cursor coordinates on firmware that processes pointer events late.
         val x = gyroCursorX
         val y = gyroCursorY
         airMouseIo.execute {
             try {
+                writePointerPacket("GYROSCOPEEVENT\r\n$x\r\n$y\r\n2\r\n\r\n")
                 writePointerPacket("GYROSCOPEEVENT\r\n$x\r\n$y\r\n0\r\n\r\n")
                 writePointerPacket("GYROSCOPEEVENT\r\n$x\r\n$y\r\n1\r\n\r\n")
             } catch (e: Exception) {
@@ -923,7 +925,7 @@ class MainActivity : Activity() {
                     if (next == null) gyroPositionWriteQueued = false
                     next
                 } ?: break
-                writePointerPacket("GYROSCOPEEVENT\r\n${position.first}\r\n${position.second}\r\n-1\r\n\r\n")
+                writePointerPacket("GYROSCOPEEVENT\r\n${position.first}\r\n${position.second}\r\n2\r\n\r\n")
             }
         } catch (e: Exception) {
             synchronized(gyroPositionLock) {
