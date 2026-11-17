@@ -2496,7 +2496,7 @@ class MainActivity : Activity() {
                                 val stream = output ?: throw IllegalStateException("قناة التحكم مغلقة")
                                 // GETFBINFO is a harmless EShare request already used during
                                 // handshake; periodic requests prevent idle-session expiry.
-                                stream.write("GETFBINFO\\r\\n1\\r\\n\\r\\n".toByteArray(Charsets.UTF_8))
+                                stream.write("GETFBINFO\r\n1\r\n\r\n".toByteArray(Charsets.UTF_8))
                                 stream.flush()
                                 lastEshareKeepAliveAt = now
                             }
