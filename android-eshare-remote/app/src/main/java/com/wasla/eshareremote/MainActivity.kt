@@ -840,8 +840,8 @@ class MainActivity : Activity() {
             val rateY = if (kotlin.math.abs(event.values[0]) < 0.008f) 0f else event.values[0]
             // Increase cursor travel while retaining time-based integration so
             // sensitivity stays consistent across different sensor sample rates.
-            val targetDx = -rateX * dt * 624f
-            val targetDy = -rateY * dt * 624f
+            val targetDx = -rateX * dt * 749f
+            val targetDy = -rateY * dt * 749f
             // Faster response with enough filtering to avoid a jittery pointer.
             smoothedGyroDx += (targetDx - smoothedGyroDx) * 0.65f
             smoothedGyroDy += (targetDy - smoothedGyroDy) * 0.65f
@@ -860,39 +860,24 @@ class MainActivity : Activity() {
         viewWidth: Int = 1,
         viewHeight: Int = 1
     ) {
-        var moveDx = dx
-        var moveDy = dy
-        if (action == 2) {
-            // Keep every small finger movement instead of dropping events while
-            // rate-limiting. Flush accumulated motion at roughly 60 Hz.
-            pendingTouchDx += dx
-            pendingTouchDy += dy
-            val now = System.currentTimeMillis()
-            if (now - lastTouchMoveAt < 16L) return
-            lastTouchMoveAt = now
-            moveDx = pendingTouchDx
-            moveDy = pendingTouchDy
-            pendingTouchDx = 0f
-            pendingTouchDy = 0f
-        } else {
-            pendingTouchDx = 0f
-            pendingTouchDy = 0f
-            lastTouchMoveAt = 0L
-        }
-        // AIRMOUSEEVNET is EShare's relative pointer protocol. Accumulating
-        // motion at a 60 Hz cadence makes the touchpad smoother without losing
-        // small movements between transmitted packets.
+        if (action != 2) return
+        // Keep all finger motion and update a persistent ABSOLUTE framebuffer
+        // position. This avoids relative-pointer firmware behavior that can
+        // snap the cursor back to screen center between touch gestures.
+        pendingTouchDx += dx
+        pendingTouchDy += dy
+        val now = System.currentTimeMillis()
+        if (now - lastTouchMoveAt < 16L) return
+        lastTouchMoveAt = now
+        val moveDx = pendingTouchDx
+        val moveDy = pendingTouchDy
+        pendingTouchDx = 0f
+        pendingTouchDy = 0f
         val scaledX = moveDx * framebufferWidth * 0.05f / viewWidth.coerceAtLeast(1)
         val scaledY = moveDy * framebufferHeight * 0.05f / viewHeight.coerceAtLeast(1)
-        val packet = "AIRMOUSEEVNET\r\n$scaledX\r\n$scaledY\r\n$action\r\n\r\n"
-        airMouseIo.execute {
-            try {
-                writePointerPacket(packet)
-            } catch (e: Exception) {
-                closeConnection()
-                setStatus("تعذر تحريك لوحة اللمس: ${e.message ?: "أعد الاتصال"}")
-            }
-        }
+        gyroCursorX = (gyroCursorX + scaledX).coerceIn(0f, framebufferWidth)
+        gyroCursorY = (gyroCursorY + scaledY).coerceIn(0f, framebufferHeight)
+        sendGyroPosition(gyroCursorX, gyroCursorY)
     }
 
     private fun sendGyroPosition(x: Float, y: Float) {
