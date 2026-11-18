@@ -2247,7 +2247,7 @@ class MainActivity : Activity() {
                         val active = waslaTvSocket ?: return@scheduleWithFixedDelay
                         val out = waslaTvOutput ?: return@scheduleWithFixedDelay
                         if (active.isClosed) throw IllegalStateException("socket closed")
-                        out.write("PING\\n".toByteArray(Charsets.UTF_8))
+                        out.write("PING\n".toByteArray(Charsets.UTF_8))
                         out.flush()
                         lastWaslaPingAt = now
                     }
