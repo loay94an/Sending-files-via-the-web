@@ -31,7 +31,12 @@
       if (!started || !config) return;
       if (peer && !peer.destroyed) {
         if (peer.disconnected) {
+          // PeerJS reconnect is asynchronous. Keep a bounded retry loop alive
+          // until signaling is back instead of attempting DataChannel setup
+          // while the Peer is still disconnected and then stopping forever.
           try { peer.reconnect(); } catch (_) {}
+          scheduleRetry(3000);
+          return;
         }
         if (config.role === "mobile") connectToTv();
       } else {
@@ -154,7 +159,20 @@
     if (!started || !config) return;
     if (!ensurePeerLibrary()) return;
     try {
-      peer = config.role === "tv" ? new window.Peer(config.peerId) : new window.Peer();
+      // Use more than one public STUN endpoint. STUN is free and helps many
+      // NAT combinations; it is not a TURN relay and cannot bypass symmetric
+      // NAT or restrictive firewalls.
+      const peerOptions = {
+        config: {
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun.cloudflare.com:3478" }
+          ]
+        }
+      };
+      peer = config.role === "tv"
+        ? new window.Peer(config.peerId, peerOptions)
+        : new window.Peer(peerOptions);
       peer.on("open", function (id) {
         native("onPeerId", String(id || ""));
         status("signaling-ready");
