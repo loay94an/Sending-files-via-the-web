@@ -2300,7 +2300,7 @@ class MainActivity : Activity() {
         }
         if (!peerJsConnected) return false
         val web = peerJsWebView ?: return false
-        val id = peerJsMessageId.incrementAndGet().toString()
+        val id = "${System.currentTimeMillis()}-${peerJsMessageId.incrementAndGet()}"
         val timeout = Runnable {
             peerActionTimeouts.remove(id)
             setStatus("لم يصل تأكيد تنفيذ الأمر من التلفاز — تحقق من الاتصال")
@@ -2320,7 +2320,6 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            true
         } catch (_: Exception) {
             peerActionTimeouts.remove(id)?.let { gestureHandler.removeCallbacks(it) }
             false
