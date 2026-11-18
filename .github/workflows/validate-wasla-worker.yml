@@ -8,7 +8,7 @@ on:
       - "wrangler-wasla.toml"
       - ".github/workflows/validate-wasla-worker.yml"
   push:
-    branches: [feat/wasla-functional-receiver-phase1]
+    branches: [feat/wasla-functional-receiver-phase1, feat/wasla-remote-control-fallback]
     paths:
       - "worker/**"
       - "wrangler-wasla.toml"
