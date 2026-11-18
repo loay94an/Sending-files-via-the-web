@@ -74,6 +74,8 @@ class TvReceiverActivity : Activity() {
         }, match())
         val pairPayload = Uri.Builder()
             .scheme("wasla").authority("pair")
+            .appendQueryParameter("transport", "peerjs")
+            .appendQueryParameter("peer", "wasla-tv-" + WaslaLocalServerService.deviceId(this).replace("-", "").lowercase())
             .appendQueryParameter("ip", WaslaLocalServerService.localIpv4())
             .appendQueryParameter("port", WaslaLocalServerService.PORT.toString())
             .appendQueryParameter("code", WaslaLocalServerService.pairCode(this))
@@ -120,7 +122,7 @@ class TvReceiverActivity : Activity() {
             setTextColor(0xffffd166.toInt())
         }, match())
         root.addView(TextView(this).apply {
-            text = "للتحكم من خارج الشبكة المحلية يستخدم وصلة PeerJS Cloud المجاني لتبادل إشارات الاتصال فقط، ثم تنتقل أوامر التحكم عبر قناة WebRTC مشفرة بين الهاتف والتلفاز. لا تحتاج إلى حساب أو عنوان خادم خاص. يجب أن يبقى الجهازان متصلين بالإنترنت، وقد تتعذر بعض الاتصالات بسبب قيود NAT. بث صورة الشاشة ليس مفعلاً في هذا الإصدار."
+            text = "امسح رمز اتصال الهاتف مرة واحدة لحفظ الاقتران. يستخدم وصلة PeerJS المجاني لتبادل إشارات الاتصال فقط، ثم تنتقل أوامر التحكم مباشرة ومشفرة بين الهاتف والتلفاز عبر WebRTC. لا تحتاج إلى حساب أو إعداد خادم أو فتح منافذ. يلزم اتصال الجهازين بالإنترنت، وقد تمنع بعض أنواع الشبكات الاتصال المباشر. يعمل الاتصال المحلي أيضاً عند توفره. بث صورة الشاشة غير مفعّل في هذا الإصدار."
             textSize = 15f
             gravity = Gravity.CENTER
             setTextColor(0xffa8bdd7.toInt())
