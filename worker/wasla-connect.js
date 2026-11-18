@@ -1,6 +1,6 @@
 const MAX_MESSAGE_BYTES = 16 * 1024;
 const DEVICE_ID = /^[0-9a-f-]{36}$/i;
-const PIN = /^\\d{6}$/;
+const PIN = /^\d{6}$/;
 
 function constantTimeEqual(a, b) {
   if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array) || a.length !== b.length) return false;
@@ -22,7 +22,7 @@ function sendJson(socket, value) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const match = url.pathname.match(/^\\/connect\\/([0-9a-f-]{36})$/i);
+    const match = url.pathname.match(/^\/connect\/([0-9a-f-]{36})$/i);
     if (!match || !DEVICE_ID.test(match[1])) return new Response("Wasla Connect relay", { status: 404 });
     if (url.protocol !== "https:" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Secure WebSocket upgrade required", { status: 426 });
