@@ -58,9 +58,14 @@ export class WaslaRelay {
     const saved = await this.ctx.storage.get("pairHash");
     // Only the TV receiver may establish the initial PIN for a device UUID.
     // A mobile client must never be able to claim an unregistered device ID.
+    if (!saved && role === "mobile") {
+      // Do not count an early phone attempt against the PIN rate limit while
+      // the TV is still starting its first relay session.
+      return new Response("TV receiver is not registered yet", { status: 409 });
+    }
     if (!saved && role === "tv") {
       await this.ctx.storage.put("pairHash", Array.from(candidate));
-    } else if (!saved || !constantTimeEqual(candidate, new Uint8Array(saved))) {
+    } else if (saved && !constantTimeEqual(candidate, new Uint8Array(saved))) {
       attempts.count += 1;
       if (attempts.count >= 8) {
         attempts.count = 0;
