@@ -2268,9 +2268,15 @@ class MainActivity : Activity() {
             24 -> "VOLUME_UP"
             25 -> "VOLUME_DOWN"
             164 -> "MUTE"
+            26 -> "POWER_DIALOG"
+            231 -> "ASSIST"
             else -> null
         }
         if (waslaKey != null && sendWaslaAction("KEY $waslaKey")) return
+        if (peerJsConnected && waslaKey == null) {
+            setStatus("هذا الزر غير مدعوم حالياً عبر التحكم عن بُعد")
+            return
+        }
         io.execute {
             try {
                 writePacketWithReconnect("KEYEVENT\r\n$key\r\n\r\n")
