@@ -6,6 +6,7 @@
   let authorized = false;
   let retryTimer = null;
   let started = false;
+  let libraryLoading = false;
 
   function native(name) {
     try {
@@ -35,6 +36,24 @@
         createPeer();
       }
     }, delay || 5000);
+  }
+  function ensurePeerLibrary() {
+    if (typeof window.Peer === "function") return true;
+    if (libraryLoading) return false;
+    libraryLoading = true;
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js";
+    script.onload = function () {
+      libraryLoading = false;
+      if (started) createPeer();
+    };
+    script.onerror = function () {
+      libraryLoading = false;
+      status("library-unavailable");
+      scheduleRetry(10000);
+    };
+    document.head.appendChild(script);
+    return false;
   }
   function handleMobileData(data) {
     if (!data || typeof data !== "object") return;
@@ -97,8 +116,6 @@
         return;
       }
       if (data.type === "action" && typeof data.command === "string" &&
-          data.command.length > 12000 && false) return;
-      if (data.type === "action" && typeof data.command === "string" &&
           data.command.length <= 12000 && typeof data.id === "string" && data.id.length <= 40) {
         native("onPeerAction", data.command, data.id);
       }
@@ -115,21 +132,16 @@
     });
   }
   function createPeer() {
-    if (!started || !config || typeof Peer !== "function") {
-      status("library-unavailable");
-      scheduleRetry(10000);
-      return;
-    }
+    if (!started || !config) return;
+    if (!ensurePeerLibrary()) return;
     try {
-      peer = config.role === "tv" ? new Peer(config.peerId) : new Peer();
+      peer = config.role === "tv" ? new window.Peer(config.peerId) : new window.Peer();
       peer.on("open", function (id) {
         native("onPeerId", String(id || ""));
         status("signaling-ready");
         if (config.role === "mobile") connectToTv();
       });
-      if (config.role === "tv") {
-        peer.on("connection", acceptFromPhone);
-      }
+      if (config.role === "tv") peer.on("connection", acceptFromPhone);
       peer.on("disconnected", function () {
         status("signaling-reconnecting");
         scheduleRetry(3000);
