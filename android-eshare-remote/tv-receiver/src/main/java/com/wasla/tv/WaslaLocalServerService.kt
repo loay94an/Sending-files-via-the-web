@@ -67,6 +67,7 @@ class WaslaLocalServerService : Service() {
     @Volatile private var discoveryThread: Thread? = null
     @Volatile private var mjpegServer: WaslaMjpegServer? = null
     @Volatile private var screenSender: WaslaWebRtcScreenSender? = null
+    @Volatile private var peerControlConnected = false
     override fun onCreate() {
         super.onCreate()
         startForeground(NOTIFICATION_ID, buildNotification())
@@ -97,6 +98,7 @@ class WaslaLocalServerService : Service() {
                     )
                     if (sender.start()) {
                         screenSender = sender
+                        if (peerControlConnected) sender.onPeerReady()
                     } else {
                         sender.stop()
                     }
@@ -174,12 +176,27 @@ class WaslaLocalServerService : Service() {
 
     inner class PeerJsNativeBridge {
         @JavascriptInterface fun onPeerId(id: String) { }
-        @JavascriptInterface fun onPeerStatus(value: String) { }
+        @JavascriptInterface fun onPeerStatus(value: String) {
+            if (value == "disconnected" || value == "connection-error" ||
+                value == "authentication-failed" || value == "signaling-closed") {
+                peerControlConnected = false
+                screenSender?.onPeerDisconnected()
+            }
+        }
         @JavascriptInterface fun onPeerReady() {
+            peerControlConnected = true
             screenSender?.onPeerReady()
         }
         @JavascriptInterface fun onPeerScreenSignal(payload: String) {
-            try { screenSender?.onSignal(JSONObject(payload)) } catch (_: Exception) { }
+            try {
+                val signal = JSONObject(payload)
+                if (signal.optString("type") == "stop") {
+                    screenSender?.stop()
+                    screenSender = null
+                } else {
+                    screenSender?.onSignal(signal)
+                }
+            } catch (_: Exception) { }
         }
         @JavascriptInterface fun isControlEnabled(): Boolean = WaslaAccessibilityService.isEnabled()
         @JavascriptInterface fun onPeerError(value: String) { }
@@ -533,6 +550,7 @@ class WaslaLocalServerService : Service() {
         running.set(false)
         screenSender?.stop()
         screenSender = null
+        peerControlConnected = false
         mjpegServer?.stop()
         mjpegServer = null
         try { listener?.close() } catch (_: Exception) { }
