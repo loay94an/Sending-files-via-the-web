@@ -74,6 +74,7 @@ class ScreenViewerActivity : Activity() {
         status.text = "جارٍ الاتصال ببث الشاشة المحلي..."
         Thread({
             var input: BufferedInputStream? = null
+            var activeConnection: HttpURLConnection? = null
             try {
                 val url = URL("http://$ip:${SCREEN_PORT}/screen.mjpeg?code=$code")
                 val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -83,6 +84,7 @@ class ScreenViewerActivity : Activity() {
                     setRequestProperty("Accept", "multipart/x-mixed-replace")
                     setRequestProperty("Cache-Control", "no-cache")
                 }
+                activeConnection = conn
                 connection = conn
                 conn.connect()
                 if (conn.responseCode != 200) throw IllegalStateException("رفض التلفاز الاتصال (${conn.responseCode})")
@@ -119,8 +121,8 @@ class ScreenViewerActivity : Activity() {
                 }
             } finally {
                 try { input?.close() } catch (_: Exception) { }
-                connection?.disconnect()
-                connection = null
+                activeConnection?.disconnect()
+                if (connection === activeConnection) connection = null
                 if (generation.get() == session) running.set(false)
             }
         }, "wasla-mjpeg-viewer").start()
