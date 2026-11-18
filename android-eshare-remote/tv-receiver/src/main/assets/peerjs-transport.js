@@ -7,6 +7,8 @@
   let retryTimer = null;
   let started = false;
   let libraryLoading = false;
+  let authFailures = 0;
+  let authBlockedUntil = 0;
 
   function native(name) {
     try {
@@ -96,6 +98,14 @@
     }
   }
   function acceptFromPhone(next) {
+    if (authorized && connection && connection.open) {
+      try { next.close(); } catch (_) {}
+      return;
+    }
+    if (Date.now() < authBlockedUntil) {
+      try { next.close(); } catch (_) {}
+      return;
+    }
     closeConnection();
     connection = next;
     authorized = false;
@@ -105,11 +115,18 @@
       if (!authorized) {
         if (data.type !== "auth" || data.deviceId !== config.deviceId ||
             typeof data.pin !== "string" || data.pin !== config.pin) {
+          authFailures += 1;
+          if (authFailures >= 5) {
+            authFailures = 0;
+            authBlockedUntil = Date.now() + 60000;
+          }
           try { next.close(); } catch (_) {}
           status("authentication-failed");
           return;
         }
         authorized = true;
+        authFailures = 0;
+        authBlockedUntil = 0;
         next.send({ type: "ready", deviceId: config.deviceId });
         status("connected");
         native("onPeerReady");
