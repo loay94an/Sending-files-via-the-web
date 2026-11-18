@@ -187,6 +187,7 @@
           return;
         }
         if (inFlightActions.has(data.id)) return;
+        if (inFlightActions.size >= 128) inFlightActions.delete(inFlightActions.values().next().value);
         inFlightActions.add(data.id);
         native("onPeerAction", data.command, data.id);
       }
