@@ -2102,17 +2102,26 @@ class MainActivity : Activity() {
             }
             val ip = uri.getQueryParameter("ip").orEmpty()
             val code = uri.getQueryParameter("code").orEmpty()
-            val port = uri.getQueryParameter("port")?.toIntOrNull()
+            val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 38471
             val deviceId = uri.getQueryParameter("id").orEmpty()
-            if (ip.isBlank() || port != 38471 || !code.matches(Regex("\\d{6}")) ||
-                !deviceId.matches(Regex("[0-9a-fA-F-]{36}"))) {
-                throw IllegalArgumentException("بيانات الاقتران غير مكتملة أو غير صالحة")
+            val transport = uri.getQueryParameter("transport").orEmpty()
+            val expectedPeerId = "wasla-tv-" + deviceId.replace("-", "").lowercase()
+            val suppliedPeerId = uri.getQueryParameter("peer").orEmpty()
+            if (port != 38471 || !code.matches(Regex("\\d{6}")) ||
+                !deviceId.matches(Regex("[0-9a-fA-F-]{36}")) ||
+                (transport.isNotBlank() && transport != "peerjs") ||
+                (suppliedPeerId.isNotBlank() && suppliedPeerId != expectedPeerId)) {
+                throw IllegalArgumentException("بيانات اقتران وصلة غير مكتملة أو غير صالحة")
             }
             prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code)
-                .putString("wasla_tv_id", deviceId).apply()
+                .putString("wasla_tv_id", deviceId).putString("wasla_tv_peer_id", expectedPeerId).apply()
             startPeerJsTransport(deviceId, code)
-            setStatus("تمت قراءة الرمز — جارٍ الاتصال المحلي والإنترنت...")
-            connectWaslaReceiver(ip, code, deviceId)
+            if (ip.isNotBlank()) {
+                setStatus("تم حفظ التلفاز — جارٍ الاتصال المحلي والإنترنت عبر PeerJS...")
+                connectWaslaReceiver(ip, code, deviceId)
+            } else {
+                setStatus("تم الاقتران — جارٍ إنشاء اتصال PeerJS المباشر عبر الإنترنت...")
+            }
         } catch (e: Exception) {
             setStatus("تعذر قراءة رمز وصلة: ${e.message ?: "رمز غير صالح"}")
         }
