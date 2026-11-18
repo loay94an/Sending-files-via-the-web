@@ -49,11 +49,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
 import java.util.concurrent.atomic.AtomicLong
 
 class MainActivity : Activity() {
@@ -95,15 +90,12 @@ class MainActivity : Activity() {
     private var pendingDownloadId: String? = null
     private var pendingDownloadName: String = "wasla-download.bin"
     private val tvFolderStack = mutableListOf<String>()
-    private val relayClient = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
-    @Volatile private var relaySocket: WebSocket? = null
     @Volatile private var peerJsConnected = false
     @Volatile private var peerJsPageLoaded = false
     private var peerJsWebView: WebView? = null
     @Volatile private var peerJsDeviceId = ""
     @Volatile private var peerJsPairCode = ""
-    private val relayConnecting = AtomicBoolean(false)
-    private val relayMessageId = AtomicLong(0L)
+    private val peerJsMessageId = AtomicLong(0L)
     private var pendingGyroPosition: Pair<Float, Float>? = null
     private var gyroPositionWriteQueued = false
     private var lastTouchMoveAt = 0L
@@ -746,18 +738,6 @@ class MainActivity : Activity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
             override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
         })
-        val relayLabel = TextView(this).apply {
-            text = "خادم الاتصال الآمن عبر الإنترنت (اختياري)"
-            textSize = 14f
-            setTextColor(0xff15243a.toInt())
-        }
-        val relayInput = EditText(this).apply {
-            hint = "https://your-worker.workers.dev"
-            isSingleLine = true
-            textSize = 14f
-            setText(prefs.getString("relay_base_url", "") ?: "")
-            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
-        }
         val touchLabel = TextView(this).apply { textSize = 15f; setTextColor(0xff15243a.toInt()) }
         val touchSeek = SeekBar(this).apply {
             max = 20
@@ -775,8 +755,6 @@ class MainActivity : Activity() {
         content.addView(airSeek, LinearLayout.LayoutParams(-1, dp(44)))
         content.addView(touchLabel)
         content.addView(touchSeek, LinearLayout.LayoutParams(-1, dp(44)))
-        content.addView(relayLabel)
-        content.addView(relayInput, LinearLayout.LayoutParams(-1, dp(48)))
         AlertDialog.Builder(this)
             .setTitle("إعدادات وصلة")
             .setView(content)
@@ -785,9 +763,7 @@ class MainActivity : Activity() {
                 prefs.edit()
                     .putFloat("air_mouse_sensitivity", (500 + airSeek.progress).toFloat())
                     .putFloat("touchpad_sensitivity", 0.5f + touchSeek.progress / 10f)
-                    .putString("relay_base_url", relayInput.text.toString().trim().trimEnd('/'))
                     .apply()
-                if (relayInput.text.toString().isNotBlank()) connectWaslaRelay() else disconnectWaslaRelay()
                 setStatus("تم حفظ إعدادات وصلة")
             }
             .setNeutralButton("تحديث التطبيق") { _, _ -> checkForUpdates() }
@@ -2293,71 +2269,6 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun connectWaslaRelay() {
-        if (!relayConnecting.compareAndSet(false, true)) return
-        val base = prefs.getString("relay_base_url", "")?.trim()?.trimEnd('/') ?: ""
-        val deviceId = prefs.getString("wasla_tv_id", "") ?: ""
-        val code = prefs.getString("wasla_tv_code", "") ?: ""
-        if (base.isBlank() || deviceId.isBlank() || !code.matches(Regex("\\d{6}"))) {
-            relayConnecting.set(false)
-            return
-        }
-        val wsBase = when {
-            base.startsWith("https://", true) -> "wss://" + base.substringAfter("://")
-            base.startsWith("wss://", true) -> base
-            else -> {
-                relayConnecting.set(false)
-                setStatus("يجب أن يبدأ عنوان خادم وصلة بـ https:// أو wss://")
-                return
-            }
-        }
-        val request = try {
-            Request.Builder().url("$wsBase/connect/$deviceId")
-                .header("X-Wasla-Role", "mobile")
-                .header("X-Wasla-Pairing-Code", code)
-                .build()
-        } catch (e: Exception) {
-            relayConnecting.set(false)
-            setStatus("عنوان خادم الربط غير صالح")
-            return
-        }
-        relaySocket?.close(1000, "Reconnect")
-        relaySocket = relayClient.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                relayConnecting.set(false)
-                setStatus("اتصال وصلة عبر الإنترنت جاهز")
-            }
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                try {
-                    val msg = JSONObject(text)
-                    when (msg.optString("type")) {
-                        "action_result" -> setStatus(if (msg.optString("result") == "ACTION_OK")
-                            "تم تنفيذ الأمر عبر الإنترنت" else "تعذر تنفيذ الأمر عبر الإنترنت: ${msg.optString("result")}")
-                        "peer-status" -> setStatus("انقطع اتصال مستقبل التلفاز عبر الإنترنت")
-                    }
-                } catch (_: Exception) { }
-            }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (relaySocket === webSocket) relaySocket = null
-                relayConnecting.set(false)
-                setStatus("تعذر الاتصال بخادم وصلة عبر الإنترنت — ستتم إعادة المحاولة")
-                if (!isFinishing) gestureHandler.postDelayed({ connectWaslaRelay() }, 8000L)
-            }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                if (relaySocket === webSocket) relaySocket = null
-                relayConnecting.set(false)
-                if (!isFinishing && prefs.getString("relay_base_url", "").orEmpty().isNotBlank()) {
-                    gestureHandler.postDelayed({ connectWaslaRelay() }, 5000L)
-                }
-            }
-        })
-    }
-
-    private fun disconnectWaslaRelay() {
-        try { relaySocket?.close(1000, "Relay disabled") } catch (_: Exception) { }
-        relaySocket = null
-    }
-
     /** Prefer the verified LAN socket; use PeerJS WebRTC DataChannel outside the LAN. */
     private fun sendWaslaAction(command: String): Boolean {
         synchronized(waslaTvLock) {
@@ -2374,7 +2285,7 @@ class MainActivity : Activity() {
             }
         }
         if (!peerJsConnected) return false
-        val id = relayMessageId.incrementAndGet().toString()
+        val id = peerJsMessageId.incrementAndGet().toString()
         val js = "window.WaslaPeer && window.WaslaPeer.send(" +
             JSONObject.quote(command) + "," + JSONObject.quote(id) + ")"
         return try {
@@ -2722,9 +2633,6 @@ class MainActivity : Activity() {
             try { web.stopLoading(); web.destroy() } catch (_: Exception) { }
         }
         peerJsWebView = null
-        disconnectWaslaRelay()
-        relayClient.dispatcher.executorService.shutdown()
-        relayClient.connectionPool.evictAll()
         waslaLinkMonitor.shutdownNow()
         waslaLinkExecutor.shutdownNow()
         closeConnection()
