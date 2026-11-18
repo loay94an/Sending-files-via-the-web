@@ -311,9 +311,9 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
-        val castButton = makeButton("▣  مشاركة الشاشة", 48, true).apply {
+        val castButton = makeButton("▣  مشاهدة الشاشة", 48, true).apply {
             textSize = 13f
-            setOnClickListener { openScreenShareSettings() }
+            setOnClickListener { startActivity(Intent(this@MainActivity, ScreenViewerActivity::class.java)) }
         }
         shortcuts.addView(castButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(5) })
         val filesButton = makeButton("⇧  نقل الملفات", 48).apply {
