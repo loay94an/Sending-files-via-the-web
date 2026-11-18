@@ -71,6 +71,14 @@ class WaslaWebRtcScreenSender(
         if (started && peerConnection == null) createOffer()
     }
 
+    @Synchronized fun onPeerDisconnected() {
+        peerReady = false
+        try { peerConnection?.close() } catch (_: Exception) {}
+        try { peerConnection?.dispose() } catch (_: Exception) {}
+        peerConnection = null
+        pendingCandidates.clear()
+    }
+
     @Synchronized fun onSignal(signal: JSONObject) {
         when (signal.optString("type")) {
             "request" -> {
