@@ -104,9 +104,26 @@ class WaslaLocalServerService : Service() {
                     }
                 }
             }
+            ACTION_START_SCREEN_MJPEG -> {
+                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
+                val permissionData = if (Build.VERSION.SDK_INT >= 33) {
+                    intent.getParcelableExtra(EXTRA_PERMISSION_DATA, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(EXTRA_PERMISSION_DATA)
+                }
+                if (resultCode == android.app.Activity.RESULT_OK && permissionData != null) {
+                    screenSender?.stop()
+                    screenSender = null
+                    mjpegServer?.stop()
+                    val stream = WaslaMjpegServer(this, pairCode(this))
+                    if (stream.start(resultCode, permissionData)) mjpegServer = stream else stream.stop()
+                }
+            }
             ACTION_STOP_SCREEN -> {
                 screenSender?.stop()
                 screenSender = null
+                peerControlConnected = false
                 mjpegServer?.stop()
                 mjpegServer = null
             }
@@ -575,6 +592,7 @@ class WaslaLocalServerService : Service() {
         const val FILE_PORT = 38472
         const val SCREEN_PORT = WaslaMjpegServer.SCREEN_PORT
         const val ACTION_START_SCREEN = "com.wasla.tv.START_SCREEN_STREAM"
+        const val ACTION_START_SCREEN_MJPEG = "com.wasla.tv.START_SCREEN_MJPEG"
         const val ACTION_STOP_SCREEN = "com.wasla.tv.STOP_SCREEN_STREAM"
         const val EXTRA_RESULT_CODE = "screen_result_code"
         const val EXTRA_PERMISSION_DATA = "screen_permission_data"
