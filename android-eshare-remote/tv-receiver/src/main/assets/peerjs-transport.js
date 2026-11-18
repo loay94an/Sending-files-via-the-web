@@ -201,6 +201,13 @@
       // NAT combinations; it is not a TURN relay and cannot bypass symmetric
       // NAT or restrictive firewalls.
       const peerOptions = {
+        // Match the public signaling endpoint used by the Wasla website.
+        // This server exchanges setup messages only; WebRTC carries control data peer-to-peer.
+        host: "0.peerjs.com",
+        port: 443,
+        path: "/",
+        secure: true,
+        debug: 1,
         config: {
           iceServers: [
             { urls: "stun:stun.l.google.com:19302" },
