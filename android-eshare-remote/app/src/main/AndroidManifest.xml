@@ -24,6 +24,7 @@
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity android:name=".ScreenViewerActivity" android:exported="false" android:screenOrientation="landscape" />
+        <activity android:name=".LocalMjpegViewerActivity" android:exported="false" android:screenOrientation="landscape" />
         <activity
             android:name=".QrScannerActivity"
             android:exported="false"
