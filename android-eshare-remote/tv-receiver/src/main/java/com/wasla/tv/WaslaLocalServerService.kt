@@ -14,11 +14,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.DataInputStream
 import java.io.DataOutputStream
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
 import android.os.Handler
 import android.os.Looper
 import android.webkit.JavascriptInterface
@@ -66,12 +61,9 @@ class WaslaLocalServerService : Service() {
         }
     }
     @Volatile private var discoverySocket: DatagramSocket? = null
-    private val relayClient = OkHttpClient.Builder().pingInterval(20, java.util.concurrent.TimeUnit.SECONDS).build()
-    @Volatile private var relaySocket: WebSocket? = null
     @Volatile private var peerJsWebView: WebView? = null
     @Volatile private var peerJsPageLoaded = false
-    private val relayHandler = Handler(Looper.getMainLooper())
-    private val relayReconnect = Runnable { connectRelayIfConfigured() }
+    private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var discoveryThread: Thread? = null
     override fun onCreate() {
         super.onCreate()
@@ -83,7 +75,6 @@ class WaslaLocalServerService : Service() {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startServer()
-        if (intent?.action == ACTION_RECONNECT_RELAY) startPeerJsTransport()
         return START_STICKY
     }
     private fun startServer() {
@@ -159,48 +150,9 @@ class WaslaLocalServerService : Service() {
                 val result = executeAction(command)
                 val js = "window.WaslaPeer && window.WaslaPeer.respond(" +
                     JSONObject.quote(id) + "," + JSONObject.quote(result) + ")"
-                relayHandler.post { peerJsWebView?.evaluateJavascript(js, null) }
+                mainHandler.post { peerJsWebView?.evaluateJavascript(js, null) }
             }
         }
-    }
-
-    private fun connectRelayIfConfigured() {
-        if (!running.get() || relaySocket != null) return
-        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val base = prefs.getString("relay_base_url", null)?.trim()?.trimEnd('/') ?: return
-        if (base.isBlank()) return
-        val wsBase = when {
-            base.startsWith("https://", true) -> "wss://" + base.substringAfter("://")
-            base.startsWith("wss://", true) -> base
-            else -> return
-        }
-        val url = "$wsBase/connect/${deviceId(this)}"
-        val request = try {
-            Request.Builder().url(url)
-                .header("X-Wasla-Role", "tv")
-                .header("X-Wasla-Pairing-Code", pairCode(this))
-                .build()
-        } catch (_: Exception) { return }
-        relaySocket = relayClient.newWebSocket(request, object : WebSocketListener() {
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                try {
-                    val message = JSONObject(text)
-                    if (message.optString("type") == "action") {
-                        val id = message.optString("id")
-                        val result = executeAction(message.optString("command"))
-                        webSocket.send(JSONObject().put("type", "action_result").put("id", id).put("result", result).toString())
-                    }
-                } catch (_: Exception) { }
-            }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (relaySocket === webSocket) relaySocket = null
-                if (running.get()) relayHandler.postDelayed(relayReconnect, 5000L)
-            }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                if (relaySocket === webSocket) relaySocket = null
-                if (running.get()) relayHandler.postDelayed(relayReconnect, 5000L)
-            }
-        })
     }
 
     private fun selectedFolder(): DocumentFile? {
@@ -536,16 +488,12 @@ class WaslaLocalServerService : Service() {
         discoveryRunning.set(false)
         acceptThread?.interrupt()
         discoveryThread?.interrupt()
-        relayHandler.removeCallbacks(relayReconnect)
+        mainHandler.removeCallbacksAndMessages(null)
         peerJsWebView?.let { web ->
             try { web.evaluateJavascript("window.WaslaPeer && window.WaslaPeer.stop()", null) } catch (_: Exception) { }
             try { web.stopLoading(); web.destroy() } catch (_: Exception) { }
         }
         peerJsWebView = null
-        try { relaySocket?.close(1000, "TV receiver stopped") } catch (_: Exception) { }
-        relaySocket = null
-        relayClient.dispatcher.executorService.shutdown()
-        relayClient.connectionPool.evictAll()
         clients.shutdownNow()
         super.onDestroy()
     }
@@ -554,7 +502,6 @@ class WaslaLocalServerService : Service() {
         const val PORT = 38471
         const val DISCOVERY_PORT = 38470
         const val FILE_PORT = 38472
-        const val ACTION_RECONNECT_RELAY = "com.wasla.tv.RECONNECT_RELAY"
         private const val MAX_FILE_BYTES = 536870912L
         const val DISCOVERY_REQUEST = "WASLA_DISCOVER/1"
         private const val CHANNEL = "wasla_tv_server"
