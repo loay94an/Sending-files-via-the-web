@@ -150,13 +150,13 @@ class WaslaMjpegServer(
     private fun streamTo(socket: Socket) {
         if (!streamSlots.tryAcquire()) {
             try {
-                socket.getOutputStream().write("HTTP/1.1 503 Service Unavailable\\r\\nConnection: close\\r\\nContent-Length: 0\\r\\n\\r\\n".toByteArray(Charsets.US_ASCII))
+                socket.getOutputStream().write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".toByteArray(Charsets.US_ASCII))
             } catch (_: Exception) { }
             try { socket.close() } catch (_: Exception) { }
             return
         }
         try {
-        socket.use { client ->
+            socket.use { client ->
             try {
                 client.soTimeout = 8000
                 val reader = BufferedReader(InputStreamReader(client.getInputStream(), Charsets.US_ASCII))
@@ -198,7 +198,7 @@ class WaslaMjpegServer(
             } catch (_: Exception) {
                 // Client disconnects are normal.
             }
-        }
+            }
         } finally {
             streamSlots.release()
         }
