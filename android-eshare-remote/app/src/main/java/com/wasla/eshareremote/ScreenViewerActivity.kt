@@ -1,211 +1,172 @@
 package com.wasla.eshareremote
 
 import android.app.Activity
-import android.graphics.BitmapFactory
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.view.Gravity
+import android.view.View
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Button
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import java.io.BufferedInputStream
-import java.io.ByteArrayOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
+import org.json.JSONObject
+import org.webrtc.SurfaceViewRenderer
 
-/** LAN MJPEG viewer for the paired Wasla TV receiver. */
+/** Receives the TV's native WebRTC video track over the already paired PeerJS signaling link. */
 class ScreenViewerActivity : Activity() {
-    private val running = AtomicBoolean(false)
-    private val generation = AtomicLong(0L)
-    private val mainHandler = Handler(Looper.getMainLooper())
-    @Volatile private var userStopped = false
-    private var retryAttempt = 0
-    private var retryRunnable: Runnable? = null
-    @Volatile private var displayedBitmap: android.graphics.Bitmap? = null
-    @Volatile private var connection: HttpURLConnection? = null
     private lateinit var status: TextView
-    private lateinit var image: ImageView
+    private lateinit var renderer: SurfaceViewRenderer
+    private var peerWebView: WebView? = null
+    private var receiver: WaslaWebRtcScreenReceiver? = null
+    private var deviceId = ""
+    private var pairingCode = ""
+    @Volatile private var peerReady = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val prefs = getSharedPreferences("remote", MODE_PRIVATE)
+        deviceId = prefs.getString("wasla_tv_id", "").orEmpty()
+        pairingCode = prefs.getString("wasla_tv_code", "").orEmpty()
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setBackgroundColor(0xff050b14.toInt())
-            setPadding(16, 16, 16, 16)
+            setPadding(12, 12, 12, 12)
         }
         status = TextView(this).apply {
-            text = "مشاهدة شاشة التلفاز — MJPEG"
-            textSize = 17f
+            text = "مشاهدة شاشة التلفاز عبر WebRTC"
+            textSize = 16f
             gravity = Gravity.CENTER
             setTextColor(0xffeaf4ff.toInt())
         }
-        root.addView(status, LinearLayout.LayoutParams(-1, dp(48)))
-        image = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            setBackgroundColor(0xff000000.toInt())
-        }
-        root.addView(image, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(status, LinearLayout.LayoutParams(-1, dp(46)))
+        renderer = SurfaceViewRenderer(this)
+        renderer.setBackgroundColor(android.graphics.Color.BLACK)
+        root.addView(renderer, LinearLayout.LayoutParams(-1, 0, 1f))
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         actions.addView(Button(this@ScreenViewerActivity).apply {
             text = "إعادة الاتصال"
             isAllCaps = false
-            setOnClickListener { retryAttempt = 0; userStopped = false; startStream() }
-        }, LinearLayout.LayoutParams(0, dp(52), 1f))
+            setOnClickListener { restartConnection() }
+        }, LinearLayout.LayoutParams(0, dp(50), 1f))
         actions.addView(Button(this@ScreenViewerActivity).apply {
-            text = "إيقاف"
+            text = "إغلاق"
             isAllCaps = false
-            setOnClickListener { userStopped = true; stopStream(); status.text = "تم إيقاف المشاهدة" }
-        }, LinearLayout.LayoutParams(0, dp(52), 1f))
-        root.addView(actions, LinearLayout.LayoutParams(-1, dp(58)))
+            setOnClickListener { finish() }
+        }, LinearLayout.LayoutParams(0, dp(50), 1f))
+        root.addView(actions, LinearLayout.LayoutParams(-1, dp(56)))
         setContentView(root)
-        startStream()
-    }
 
-    private fun startStream() {
-        stopStream()
-        userStopped = false
-        retryRunnable?.let { mainHandler.removeCallbacks(it) }
-        retryRunnable = null
-        val prefs = getSharedPreferences("remote", MODE_PRIVATE)
-        val ip = prefs.getString("wasla_tv_ip", "")?.trim().orEmpty()
-        val code = prefs.getString("wasla_tv_code", "")?.trim().orEmpty()
-        if (ip.isBlank() || code.length != 6) {
-            status.text = "بث MJPEG الحالي يعمل داخل الشبكة المحلية فقط. يلزم إكمال مسار WebRTC لمشاهدة التلفاز عبر الإنترنت."
+        if (!deviceId.matches(Regex("[0-9a-fA-F-]{36}")) || !pairingCode.matches(Regex("\\d{6}"))) {
+            status.text = "امسح رمز اقتران وصلة من التلفاز أولاً"
             return
         }
-        val session = generation.incrementAndGet()
-        running.set(true)
-        status.text = "جارٍ الاتصال ببث الشاشة المحلي..."
-        Thread({
-            var input: BufferedInputStream? = null
-            var activeConnection: HttpURLConnection? = null
-            try {
-                val url = URL("http://$ip:${SCREEN_PORT}/screen.mjpeg?code=$code")
-                val conn = (url.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 7000
-                    readTimeout = 15000
-                    requestMethod = "GET"
-                    setRequestProperty("Accept", "multipart/x-mixed-replace")
-                    setRequestProperty("Cache-Control", "no-cache")
+        startReceiver()
+        startPeerTransport()
+    }
+
+    private fun startReceiver() {
+        receiver?.stop()
+        receiver = WaslaWebRtcScreenReceiver(
+            this, renderer,
+            sendSignal = { signal -> sendScreenSignal(signal) },
+            onState = { value -> runOnUiThread { updateState(value) } }
+        )
+    }
+
+    private fun startPeerTransport() {
+        peerReady = false
+        val web = WebView(this).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            addJavascriptInterface(ScreenPeerBridge(), "WaslaNative")
+            webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView, url: String) {
+                    val peerId = "wasla-tv-" + deviceId.replace("-", "").lowercase()
+                    val options = JSONObject().put("role", "mobile")
+                        .put("deviceId", deviceId).put("pin", pairingCode).put("peerId", peerId)
+                    view.evaluateJavascript("window.WaslaPeer && window.WaslaPeer.start($options)", null)
                 }
-                activeConnection = conn
-                connection = conn
-                conn.connect()
-                if (conn.responseCode != 200) throw IllegalStateException("رفض التلفاز الاتصال (${conn.responseCode})")
-                input = BufferedInputStream(conn.inputStream, 64 * 1024)
-                runOnUiThread {
-                    if (running.get() && generation.get() == session) {
-                        retryAttempt = 0
-                        status.text = "متصل — بث مباشر عبر MJPEG (الشبكة المحلية)"
-                    }
-                }
-                var frames = 0
-                var fpsStarted = System.currentTimeMillis()
-                while (running.get() && generation.get() == session) {
-                    var line = readAsciiLine(input) ?: break
-                    while (line.isEmpty() && running.get()) line = readAsciiLine(input) ?: break
-                    if (!running.get()) break
-                    if (!line.startsWith("--frame")) continue
-                    var contentLength = -1
-                    while (true) {
-                        val header = readAsciiLine(input) ?: throw IllegalStateException("انتهى تدفق البث")
-                        if (header.isEmpty()) break
-                        if (header.startsWith("Content-Length:", true)) {
-                            contentLength = header.substringAfter(':').trim().toIntOrNull() ?: -1
-                        }
-                    }
-                    if (contentLength !in 1..8_000_000) throw IllegalStateException("حجم إطار غير صالح")
-                    val bytes = readExactly(input, contentLength)
-                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: continue
-                    frames++
-                    val now = System.currentTimeMillis()
-                    val measuredFps = if (now - fpsStarted >= 1000L) {
-                        val value = frames * 1000 / (now - fpsStarted).coerceAtLeast(1L)
-                        frames = 0
-                        fpsStarted = now
-                        value
-                    } else -1
-                    runOnUiThread {
-                        if (running.get() && generation.get() == session) {
-                            displayedBitmap?.recycle()
-                            displayedBitmap = bitmap
-                            image.setImageBitmap(bitmap)
-                            if (measuredFps >= 0) status.text = "متصل — $measuredFps إطار/ث عبر الشبكة المحلية"
-                        } else bitmap.recycle()
-                    }
-                }
-                if (running.get() && generation.get() == session) throw IllegalStateException("انتهى بث الشاشة")
-            } catch (e: Exception) {
-                if (running.get() && generation.get() == session) runOnUiThread {
-                    status.text = "انقطع بث الشاشة: ${e.message ?: "تحقق من اتصال الشبكة"}"
-                    scheduleReconnect()
-                }
-            } finally {
-                try { input?.close() } catch (_: Exception) { }
-                activeConnection?.disconnect()
-                if (connection === activeConnection) connection = null
-                if (generation.get() == session) running.set(false)
             }
-        }, "wasla-mjpeg-viewer").start()
-    }
-
-    private fun scheduleReconnect() {
-        if (userStopped || isFinishing || isDestroyed) return
-        retryRunnable?.let { mainHandler.removeCallbacks(it) }
-        val delay = (1000L shl retryAttempt.coerceAtMost(5)).coerceAtMost(30000L)
-        retryAttempt++
-        status.text = "انقطع البث — إعادة المحاولة خلال ${delay / 1000} ث..."
-        val retry = Runnable {
-            retryRunnable = null
-            if (!userStopped && !isFinishing && !isDestroyed) startStream()
         }
-        retryRunnable = retry
-        mainHandler.postDelayed(retry, delay)
+        peerWebView = web
+        addContentView(web, LinearLayout.LayoutParams(dp(1), dp(1)))
+        web.loadUrl("file:///android_asset/peerjs-transport.html")
+        status.text = "جارٍ الاتصال بالتلفاز عبر الإنترنت..."
     }
 
-    private fun stopStream() {
-        generation.incrementAndGet()
-        running.set(false)
-        try { connection?.disconnect() } catch (_: Exception) { }
-        connection = null
-    }
-
-    private fun readAsciiLine(input: BufferedInputStream): String? {
-        val bytes = ByteArrayOutputStream()
-        while (true) {
-            val value = input.read()
-            if (value < 0) return if (bytes.size() == 0) null else bytes.toString("US-ASCII").trimEnd('\r')
-            if (value == 10) return bytes.toString("US-ASCII").trimEnd('\r')
-            if (bytes.size() < 4096) bytes.write(value)
+    private fun sendScreenSignal(signal: JSONObject) {
+        val quoted = JSONObject.quote(signal.toString())
+        runOnUiThread {
+            peerWebView?.evaluateJavascript(
+                "window.WaslaPeer && window.WaslaPeer.sendScreenSignal($quoted)", null
+            )
         }
     }
 
-    private fun readExactly(input: BufferedInputStream, count: Int): ByteArray {
-        val bytes = ByteArray(count)
-        var offset = 0
-        while (offset < count) {
-            val read = input.read(bytes, offset, count - offset)
-            if (read < 0) throw java.io.EOFException("إطار JPEG غير مكتمل")
-            offset += read
+    private fun restartConnection() {
+        status.text = "جارٍ إعادة الاتصال ببث الشاشة..."
+        peerReady = false
+        receiver?.stop()
+        startReceiver()
+        peerWebView?.evaluateJavascript("window.WaslaPeer && window.WaslaPeer.stop()", null)
+        peerWebView?.let {
+            try { (it.parent as? android.view.ViewGroup)?.removeView(it) } catch (_: Exception) {}
+            try { it.stopLoading(); it.destroy() } catch (_: Exception) {}
         }
-        return bytes
+        peerWebView = null
+        startPeerTransport()
+    }
+
+    private fun updateState(value: String) {
+        status.text = when (value) {
+            "connected" -> "تم الاتصال بالتلفاز — جارٍ استقبال الفيديو..."
+            "screen-capturing" -> "التلفاز يلتقط الشاشة — جارٍ تجهيز البث..."
+            "screen-negotiating", "screen-connecting" -> "جارٍ إنشاء اتصال الفيديو المباشر..."
+            "screen-video-track" -> "وصل مسار الفيديو — جارٍ عرض الشاشة..."
+            "screen-connected" -> "متصل — بث الشاشة مباشر عبر WebRTC"
+            "screen-disconnected" -> "انقطع الفيديو — يمكنك إعادة الاتصال"
+            "screen-connection-failed" -> "تعذر إنشاء مسار الفيديو المباشر"
+            "disconnected", "connection-error", "signaling-error" -> "انقطع اتصال الإشارة — تحقق من الإنترنت"
+            "authentication-failed" -> "فشل التحقق من اقتران التلفاز"
+            "library-unavailable" -> "تعذر تحميل مكتبة الاتصال — تحقق من الإنترنت"
+            else -> "حالة بث الشاشة: $value"
+        }
+    }
+
+    inner class ScreenPeerBridge {
+        @JavascriptInterface fun onPeerId(id: String) {}
+        @JavascriptInterface fun onPeerStatus(value: String) {
+            runOnUiThread { updateState(value) }
+        }
+        @JavascriptInterface fun onPeerReady(controlReady: Boolean) {
+            peerReady = true
+            runOnUiThread { status.text = "تم توثيق الاتصال — طلب بث شاشة التلفاز..." }
+            sendScreenSignal(JSONObject().put("type", "request"))
+        }
+        @JavascriptInterface fun onPeerScreenSignal(payload: String) {
+            try { receiver?.onSignal(JSONObject(payload)) } catch (_: Exception) {}
+        }
+        @JavascriptInterface fun onPeerActionResult(id: String, result: String) {}
+        @JavascriptInterface fun onPeerError(value: String) {
+            runOnUiThread { status.text = "تعذر الاتصال بالتلفاز ($value)" }
+        }
+        @JavascriptInterface fun isControlEnabled(): Boolean = true
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
     override fun onDestroy() {
-        userStopped = true
-        retryRunnable?.let { mainHandler.removeCallbacks(it) }
-        retryRunnable = null
-        stopStream()
-        displayedBitmap?.recycle()
-        displayedBitmap = null
+        receiver?.stop()
+        receiver = null
+        peerWebView?.let {
+            try { it.evaluateJavascript("window.WaslaPeer && window.WaslaPeer.stop()", null) } catch (_: Exception) {}
+            try { (it.parent as? android.view.ViewGroup)?.removeView(it) } catch (_: Exception) {}
+            try { it.stopLoading(); it.destroy() } catch (_: Exception) {}
+        }
+        peerWebView = null
         super.onDestroy()
     }
-
-    companion object { private const val SCREEN_PORT = 38473 }
 }
