@@ -38,7 +38,7 @@ class WaslaWebRtcScreenSender(
                 .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
                 .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
                 .createPeerConnectionFactory()
-            val source = factory!!.createVideoSource(false)
+            val source = factory!!.createVideoSource(true)
             videoSource = source
             val screenCapturer = ScreenCapturerAndroid(projectionIntent, object : android.media.projection.MediaProjection.Callback() {
                 override fun onStop() {
@@ -51,8 +51,9 @@ class WaslaWebRtcScreenSender(
             surfaceHelper = helper
             screenCapturer.initialize(helper, appContext, source.capturerObserver)
             val metrics = appContext.resources.displayMetrics
-            val width = metrics.widthPixels.coerceIn(480, 1920)
-            val height = metrics.heightPixels.coerceIn(270, 1080)
+            val sourceWidth = metrics.widthPixels.coerceAtLeast(1)
+            val width = minOf(sourceWidth, 1280).coerceAtLeast(480)
+            val height = (metrics.heightPixels.toFloat() * width / sourceWidth).toInt().coerceIn(270, 720)
             screenCapturer.startCapture(width, height, 10)
             videoTrack = factory!!.createVideoTrack("wasla-screen-track", source).apply { setEnabled(true) }
             started = true
