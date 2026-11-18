@@ -315,8 +315,18 @@ class MainActivity : Activity() {
         val castButton = makeButton("▣  مشاهدة الشاشة", 48, true).apply {
             textSize = 13f
             setOnClickListener {
-                pausePeerJsForScreenViewer()
-                startActivity(Intent(this@MainActivity, ScreenViewerActivity::class.java))
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("اختر طريقة مشاهدة الشاشة")
+                    .setItems(arrayOf("عبر الإنترنت — WebRTC", "داخل الشبكة المحلية — MJPEG")) { _, choice ->
+                        if (choice == 0) {
+                            pausePeerJsForScreenViewer()
+                            startActivity(Intent(this@MainActivity, ScreenViewerActivity::class.java))
+                        } else {
+                            startActivity(Intent(this@MainActivity, LocalMjpegViewerActivity::class.java))
+                        }
+                    }
+                    .setNegativeButton("إلغاء", null)
+                    .show()
             }
         }
         shortcuts.addView(castButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(5) })
