@@ -159,6 +159,11 @@ class ScreenViewerActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     override fun onDestroy() {
+        if (peerReady) {
+            peerWebView?.evaluateJavascript(
+                "window.WaslaPeer && window.WaslaPeer.sendScreenSignal({type:'stop'})", null
+            )
+        }
         receiver?.stop()
         receiver = null
         peerWebView?.let {
