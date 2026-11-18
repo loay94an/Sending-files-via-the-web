@@ -142,6 +142,7 @@ class WaslaLocalServerService : Service() {
         @JavascriptInterface fun onPeerId(id: String) { }
         @JavascriptInterface fun onPeerStatus(value: String) { }
         @JavascriptInterface fun onPeerReady() { }
+        @JavascriptInterface fun isControlEnabled(): Boolean = WaslaAccessibilityService.isEnabled()
         @JavascriptInterface fun onPeerError(value: String) { }
         @JavascriptInterface fun onPeerActionResult(result: String) { }
         @JavascriptInterface fun onPeerAction(command: String, id: String) {
