@@ -15,6 +15,9 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.InetSocketAddress
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Semaphore
 import java.net.URLDecoder
 import java.security.MessageDigest
 import java.util.concurrent.Executors
@@ -32,8 +35,9 @@ class WaslaMjpegServer(
     private val active = AtomicBoolean(false)
     private val lastEncodedAt = AtomicLong(0L)
     private val encodingFrame = AtomicBoolean(false)
-    private val workers = Executors.newCachedThreadPool()
-    private val encoder = Executors.newSingleThreadExecutor()
+    @Volatile private var workers: ExecutorService = Executors.newCachedThreadPool()
+    @Volatile private var encoder: ExecutorService = Executors.newSingleThreadExecutor()
+    private val streamSlots = Semaphore(2)
     @Volatile private var latestJpeg: ByteArray? = null
     @Volatile private var httpServer: ServerSocket? = null
     @Volatile private var projection: MediaProjection? = null
@@ -44,6 +48,8 @@ class WaslaMjpegServer(
     fun start(resultCode: Int, data: Intent): Boolean {
         if (active.get()) return true
         return try {
+            if (workers.isShutdown) workers = Executors.newCachedThreadPool()
+            if (encoder.isShutdown) encoder = Executors.newSingleThreadExecutor()
             val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             val mediaProjection = manager.getMediaProjection(resultCode, data) ?: return false
             projection = mediaProjection
@@ -56,7 +62,7 @@ class WaslaMjpegServer(
             imageReader = reader
             reader.setOnImageAvailableListener({ source ->
                 val image = try { source.acquireLatestImage() } catch (_: Exception) { null } ?: return@setOnImageAvailableListener
-                val now = System.currentTimeMillis()
+                val now = android.os.SystemClock.elapsedRealtime()
                 if (now - lastEncodedAt.get() < 100L) {
                     image.close()
                     return@setOnImageAvailableListener
@@ -120,14 +126,20 @@ class WaslaMjpegServer(
     }
 
     private fun startHttpServer() {
+        val server = ServerSocket()
+        server.reuseAddress = true
+        server.bind(InetSocketAddress(SCREEN_PORT))
+        httpServer = server
         workers.execute {
             try {
-                val server = ServerSocket(SCREEN_PORT)
-                httpServer = server
                 while (active.get()) {
                     val client = server.accept()
                     client.tcpNoDelay = true
-                    workers.execute { streamTo(client) }
+                    try {
+                        workers.execute { streamTo(client) }
+                    } catch (_: Exception) {
+                        try { client.close() } catch (_: Exception) { }
+                    }
                 }
             } catch (_: Exception) {
                 // Socket closure is expected when the user stops screen sharing.
@@ -136,6 +148,14 @@ class WaslaMjpegServer(
     }
 
     private fun streamTo(socket: Socket) {
+        if (!streamSlots.tryAcquire()) {
+            try {
+                socket.getOutputStream().write("HTTP/1.1 503 Service Unavailable\\r\\nConnection: close\\r\\nContent-Length: 0\\r\\n\\r\\n".toByteArray(Charsets.US_ASCII))
+            } catch (_: Exception) { }
+            try { socket.close() } catch (_: Exception) { }
+            return
+        }
+        try {
         socket.use { client ->
             try {
                 client.soTimeout = 8000
@@ -178,6 +198,9 @@ class WaslaMjpegServer(
             } catch (_: Exception) {
                 // Client disconnects are normal.
             }
+        }
+        } finally {
+            streamSlots.release()
         }
     }
 
