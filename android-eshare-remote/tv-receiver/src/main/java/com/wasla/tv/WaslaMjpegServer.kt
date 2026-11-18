@@ -100,7 +100,7 @@ class WaslaMjpegServer(
                 "Wasla-MJPEG", width, height, metrics.densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.surface, null, mainHandler
-            )
+            ) ?: throw IllegalStateException("تعذر إنشاء شاشة الالتقاط")
             active.set(true)
             startHttpServer()
             true
@@ -180,10 +180,12 @@ class WaslaMjpegServer(
         virtualDisplay = null
         try { imageReader?.setOnImageAvailableListener(null, null); imageReader?.close() } catch (_: Exception) { }
         imageReader = null
-        try { projection?.stop() } catch (_: Exception) { }
+        val oldProjection = projection
         projection = null
+        try { oldProjection?.stop() } catch (_: Exception) { }
         latestJpeg = null
         encoder.shutdownNow()
+        workers.shutdownNow()
     }
 
     private fun constantTimeEquals(a: String, b: String): Boolean =
