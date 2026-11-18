@@ -66,6 +66,7 @@ class WaslaLocalServerService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var discoveryThread: Thread? = null
     @Volatile private var mjpegServer: WaslaMjpegServer? = null
+    @Volatile private var screenSender: WaslaWebRtcScreenSender? = null
     override fun onCreate() {
         super.onCreate()
         startForeground(NOTIFICATION_ID, buildNotification())
@@ -87,15 +88,23 @@ class WaslaLocalServerService : Service() {
                 }
                 if (resultCode == android.app.Activity.RESULT_OK && permissionData != null) {
                     mjpegServer?.stop()
-                    val stream = WaslaMjpegServer(this, pairCode(this))
-                    if (stream.start(resultCode, permissionData)) {
-                        mjpegServer = stream
+                    mjpegServer = null
+                    screenSender?.stop()
+                    val sender = WaslaWebRtcScreenSender(
+                        this, permissionData,
+                        sendSignal = { signal -> sendScreenSignal(signal) },
+                        onState = { value -> android.util.Log.i("WaslaScreen", value) }
+                    )
+                    if (sender.start()) {
+                        screenSender = sender
                     } else {
-                        stream.stop()
+                        sender.stop()
                     }
                 }
             }
             ACTION_STOP_SCREEN -> {
+                screenSender?.stop()
+                screenSender = null
                 mjpegServer?.stop()
                 mjpegServer = null
             }
@@ -166,7 +175,12 @@ class WaslaLocalServerService : Service() {
     inner class PeerJsNativeBridge {
         @JavascriptInterface fun onPeerId(id: String) { }
         @JavascriptInterface fun onPeerStatus(value: String) { }
-        @JavascriptInterface fun onPeerReady() { }
+        @JavascriptInterface fun onPeerReady() {
+            screenSender?.onPeerReady()
+        }
+        @JavascriptInterface fun onPeerScreenSignal(payload: String) {
+            try { screenSender?.onSignal(JSONObject(payload)) } catch (_: Exception) { }
+        }
         @JavascriptInterface fun isControlEnabled(): Boolean = WaslaAccessibilityService.isEnabled()
         @JavascriptInterface fun onPeerError(value: String) { }
         @JavascriptInterface fun onPeerActionResult(result: String) { }
@@ -178,6 +192,15 @@ class WaslaLocalServerService : Service() {
                     JSONObject.quote(id) + "," + JSONObject.quote(result) + ")"
                 mainHandler.post { peerJsWebView?.evaluateJavascript(js, null) }
             }
+        }
+    }
+
+    private fun sendScreenSignal(signal: JSONObject) {
+        val payload = JSONObject.quote(signal.toString())
+        mainHandler.post {
+            peerJsWebView?.evaluateJavascript(
+                "window.WaslaPeer && window.WaslaPeer.sendScreenSignal($payload)", null
+            )
         }
     }
 
@@ -508,6 +531,8 @@ class WaslaLocalServerService : Service() {
     }
     override fun onDestroy() {
         running.set(false)
+        screenSender?.stop()
+        screenSender = null
         mjpegServer?.stop()
         mjpegServer = null
         try { listener?.close() } catch (_: Exception) { }
