@@ -62,7 +62,7 @@
     if (data.type === "ready" && data.deviceId === config.deviceId) {
       authorized = true;
       status("connected");
-      native("onPeerReady");
+      native("onPeerReady", data.controlReady === true);
     } else if (data.type === "action_result") {
       native("onPeerActionResult", String(data.result || ""));
     } else if (data.type === "peer-status" && data.status === "disconnected") {
@@ -127,7 +127,9 @@
         authorized = true;
         authFailures = 0;
         authBlockedUntil = 0;
-        next.send({ type: "ready", deviceId: config.deviceId });
+        let controlReady = false;
+        try { controlReady = !!(window.WaslaNative && window.WaslaNative.isControlEnabled()); } catch (_) {}
+        next.send({ type: "ready", deviceId: config.deviceId, controlReady: controlReady });
         status("connected");
         native("onPeerReady");
         return;
