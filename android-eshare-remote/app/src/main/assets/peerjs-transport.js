@@ -5,6 +5,7 @@
   let config = null;
   let authorized = false;
   let retryTimer = null;
+  let connectionTimer = null;
   let started = false;
   let libraryLoading = false;
   let authFailures = 0;
@@ -17,7 +18,12 @@
     } catch (_) {}
   }
   function status(value) { native("onPeerStatus", value); }
+  function clearConnectionTimer() {
+    if (connectionTimer) clearTimeout(connectionTimer);
+    connectionTimer = null;
+  }
   function closeConnection() {
+    clearConnectionTimer();
     authorized = false;
     if (connection) {
       try { connection.close(); } catch (_) {}
@@ -66,6 +72,7 @@
     if (!data || typeof data !== "object") return;
     if (data.type === "ready" && data.deviceId === config.deviceId) {
       authorized = true;
+      clearConnectionTimer();
       status("connected");
       native("onPeerReady", data.controlReady === true);
     } else if (data.type === "action_result") {
@@ -76,13 +83,30 @@
   }
   function connectToTv() {
     if (!peer || peer.destroyed || peer.disconnected || !config || config.role !== "mobile") return;
-    if (connection && (connection.open || connection.peer)) return;
+    if (connection && connection.open) return;
+    if (connection) closeConnection();
     try {
       const next = peer.connect(config.peerId, { reliable: true, serialization: "json" });
       connection = next;
+      connectionTimer = setTimeout(function () {
+        if (connection !== next || authorized) return;
+        status("connection-timeout");
+        closeConnection();
+        scheduleRetry(2500);
+      }, 18000);
       next.on("open", function () {
+        clearConnectionTimer();
         status("authenticating");
-        next.send({ type: "auth", deviceId: config.deviceId, pin: config.pin });
+        try { next.send({ type: "auth", deviceId: config.deviceId, pin: config.pin }); }
+        catch (_) { status("connection-error"); closeConnection(); scheduleRetry(2500); }
+        if (connection === next && !authorized) {
+          connectionTimer = setTimeout(function () {
+            if (connection !== next || authorized) return;
+            status("authentication-timeout");
+            closeConnection();
+            scheduleRetry(2500);
+          }, 12000);
+        }
       });
       next.on("data", handleMobileData);
       next.on("close", function () {
@@ -114,7 +138,20 @@
     closeConnection();
     connection = next;
     authorized = false;
-    next.on("open", function () { status("authenticating"); });
+    connectionTimer = setTimeout(function () {
+      if (connection !== next || authorized) return;
+      status("connection-timeout");
+      closeConnection();
+    }, 18000);
+    next.on("open", function () {
+      clearConnectionTimer();
+      status("authenticating");
+      connectionTimer = setTimeout(function () {
+        if (connection !== next || authorized) return;
+        status("authentication-timeout");
+        closeConnection();
+      }, 12000);
+    });
     next.on("data", function (data) {
       if (!data || typeof data !== "object") return;
       if (!authorized) {
@@ -130,6 +167,7 @@
           return;
         }
         authorized = true;
+        clearConnectionTimer();
         authFailures = 0;
         authBlockedUntil = 0;
         let controlReady = false;
@@ -184,9 +222,21 @@
         scheduleRetry(3000);
       });
       peer.on("error", function (error) {
-        native("onPeerError", String(error && (error.type || error.message) || "peer-error"));
-        status("signaling-error");
-        scheduleRetry(error && error.type === "unavailable-id" ? 8000 : 5000);
+        const type = String(error && (error.type || error.message) || "peer-error");
+        native("onPeerError", type);
+        status(type === "unavailable-id" ? "peer-id-conflict" : "signaling-error");
+        if (type === "unavailable-id") {
+          closeConnection();
+          const oldPeer = peer;
+          peer = null;
+          try { oldPeer.destroy(); } catch (_) {}
+          scheduleRetry(2500);
+        } else {
+          if (config && config.role === "mobile" && type === "peer-unavailable") {
+            closeConnection();
+          }
+          scheduleRetry(5000);
+        }
       });
       peer.on("close", function () {
         status("signaling-closed");
@@ -233,6 +283,7 @@
       started = false;
       if (retryTimer) clearTimeout(retryTimer);
       retryTimer = null;
+      clearConnectionTimer();
       closeConnection();
       if (peer) {
         try { peer.destroy(); } catch (_) {}
