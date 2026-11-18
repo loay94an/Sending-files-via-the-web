@@ -144,7 +144,7 @@ class TvReceiverActivity : Activity() {
         }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) })
         root.addView(actions, match())
         root.addView(Button(this).apply {
-            text = "بدء بث شاشة التلفاز إلى الهاتف (MJPEG)"
+            text = "بدء بث شاشة التلفاز إلى الهاتف (WebRTC)"
             isAllCaps = false
             setOnClickListener {
                 try {
@@ -211,7 +211,7 @@ class TvReceiverActivity : Activity() {
                     .putExtra(WaslaLocalServerService.EXTRA_PERMISSION_DATA, data)
                 try {
                     if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(serviceIntent) else startService(serviceIntent)
-                    status.text = "تمت الموافقة — جارٍ تشغيل بث MJPEG على المنفذ ${WaslaLocalServerService.SCREEN_PORT}"
+                    status.text = "تمت الموافقة — جارٍ تجهيز بث الشاشة المباشر عبر WebRTC"
                 } catch (_: Exception) {
                     status.text = "تعذر تشغيل خدمة بث الشاشة"
                 }
