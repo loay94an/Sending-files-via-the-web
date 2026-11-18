@@ -2,6 +2,8 @@ package com.wasla.eshareremote
 
 import android.app.Activity
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.webkit.JavascriptInterface
@@ -22,6 +24,8 @@ class ScreenViewerActivity : Activity() {
     private var deviceId = ""
     private var pairingCode = ""
     @Volatile private var peerReady = false
+    private val retryHandler = Handler(Looper.getMainLooper())
+    private var screenRetry: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -126,14 +130,37 @@ class ScreenViewerActivity : Activity() {
             "screen-capturing" -> "التلفاز يلتقط الشاشة — جارٍ تجهيز البث..."
             "screen-negotiating", "screen-connecting" -> "جارٍ إنشاء اتصال الفيديو المباشر..."
             "screen-video-track" -> "وصل مسار الفيديو — جارٍ عرض الشاشة..."
-            "screen-connected" -> "متصل — بث الشاشة مباشر عبر WebRTC"
-            "screen-disconnected" -> "انقطع الفيديو — يمكنك إعادة الاتصال"
-            "screen-connection-failed" -> "تعذر إنشاء مسار الفيديو المباشر"
+            "screen-connected" -> {
+                screenRetry?.let { retryHandler.removeCallbacks(it) }
+                screenRetry = null
+                "متصل — بث الشاشة مباشر عبر WebRTC"
+            }
+            "screen-disconnected" -> {
+                scheduleScreenRetry()
+                "انقطع الفيديو — جارٍ استعادة المسار..." 
+            }
+            "screen-connection-failed" -> {
+                scheduleScreenRetry()
+                "تعذر إنشاء مسار الفيديو — جارٍ إعادة المحاولة..." 
+            }
             "disconnected", "connection-error", "signaling-error" -> "انقطع اتصال الإشارة — تحقق من الإنترنت"
             "authentication-failed" -> "فشل التحقق من اقتران التلفاز"
             "library-unavailable" -> "تعذر تحميل مكتبة الاتصال — تحقق من الإنترنت"
             else -> "حالة بث الشاشة: $value"
         }
+    }
+
+    private fun scheduleScreenRetry() {
+        if (!peerReady || isFinishing || isDestroyed) return
+        screenRetry?.let { retryHandler.removeCallbacks(it) }
+        val retry = Runnable {
+            screenRetry = null
+            if (peerReady && !isFinishing && !isDestroyed) {
+                sendScreenSignal(JSONObject().put("type", "request"))
+            }
+        }
+        screenRetry = retry
+        retryHandler.postDelayed(retry, 3000L)
     }
 
     inner class ScreenPeerBridge {
@@ -159,6 +186,8 @@ class ScreenViewerActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     override fun onDestroy() {
+        screenRetry?.let { retryHandler.removeCallbacks(it) }
+        screenRetry = null
         if (peerReady) {
             peerWebView?.evaluateJavascript(
                 "window.WaslaPeer && window.WaslaPeer.sendScreenSignal({type:'stop'})", null
