@@ -25,6 +25,10 @@ import android.view.Gravity
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.view.ViewGroup
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.*
 import java.io.OutputStream
 import java.io.DataInputStream
@@ -93,6 +97,11 @@ class MainActivity : Activity() {
     private val tvFolderStack = mutableListOf<String>()
     private val relayClient = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
     @Volatile private var relaySocket: WebSocket? = null
+    @Volatile private var peerJsConnected = false
+    @Volatile private var peerJsPageLoaded = false
+    private var peerJsWebView: WebView? = null
+    @Volatile private var peerJsDeviceId = ""
+    @Volatile private var peerJsPairCode = ""
     private val relayConnecting = AtomicBoolean(false)
     private val relayMessageId = AtomicLong(0L)
     private var pendingGyroPosition: Pair<Float, Float>? = null
@@ -146,6 +155,7 @@ class MainActivity : Activity() {
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         buildUi()
+        initPeerJsWebView()
         val saved = prefs.getString("ip", "") ?: ""
         ipInput.setText(saved)
         registerNetworkCallback()
@@ -154,9 +164,12 @@ class MainActivity : Activity() {
         else discoverAndConnect()
         val savedWaslaIp = prefs.getString("wasla_tv_ip", "") ?: ""
         val savedWaslaCode = prefs.getString("wasla_tv_code", "") ?: ""
+        val savedWaslaId = prefs.getString("wasla_tv_id", "") ?: ""
         startWaslaLinkMonitor()
-        if (savedWaslaIp.isNotBlank() && savedWaslaCode.isNotBlank()) connectWaslaReceiver(savedWaslaIp, savedWaslaCode)
-        connectWaslaRelay()
+        if (savedWaslaIp.isNotBlank() && savedWaslaCode.isNotBlank() && savedWaslaId.isNotBlank()) {
+            startPeerJsTransport(savedWaslaId, savedWaslaCode)
+            connectWaslaReceiver(savedWaslaIp, savedWaslaCode, savedWaslaId)
+        }
     }
 
     private fun buildUi() {
@@ -2115,10 +2128,14 @@ class MainActivity : Activity() {
             val code = uri.getQueryParameter("code").orEmpty()
             val port = uri.getQueryParameter("port")?.toIntOrNull()
             val deviceId = uri.getQueryParameter("id").orEmpty()
-            if (ip.isBlank() || port != 38471 || !code.matches(Regex("\\d{6}")) || deviceId.isBlank()) {
+            if (ip.isBlank() || port != 38471 || !code.matches(Regex("\\d{6}")) ||
+                !deviceId.matches(Regex("[0-9a-fA-F-]{36}"))) {
                 throw IllegalArgumentException("بيانات الاقتران غير مكتملة أو غير صالحة")
             }
-            setStatus("تمت قراءة رمز الشاشة — جارٍ الاقتران...")
+            prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code)
+                .putString("wasla_tv_id", deviceId).apply()
+            startPeerJsTransport(deviceId, code)
+            setStatus("تمت قراءة الرمز — جارٍ الاتصال المحلي والإنترنت...")
             connectWaslaReceiver(ip, code, deviceId)
         } catch (e: Exception) {
             setStatus("تعذر قراءة رمز وصلة: ${e.message ?: "رمز غير صالح"}")
@@ -2168,13 +2185,13 @@ class MainActivity : Activity() {
                 lastWaslaPongAt = now
                 lastWaslaPingAt = now
                 prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code)
-                    .putString("wasla_tv_id", expectedDeviceId ?: "").apply()
+                    .putString("wasla_tv_id", info[1]).apply()
+                startPeerJsTransport(info[1], code)
                 runOnUiThread { connectionIpLabel?.text = "⌁  $ip" }
                 setStatus(
                     if (controlReady) "تم الاقتران والتحكم جاهز — $ip"
                     else "تم الاقتران، لكن التحكم غير مفعّل على التلفاز. افتح وصلة TV وفعّل خدمة إمكانية الوصول."
                 )
-                connectWaslaRelay()
                 Thread({
                     try {
                         while (!socket.isClosed) {
@@ -2341,14 +2358,14 @@ class MainActivity : Activity() {
         relaySocket = null
     }
 
-    /** Sends an allow-listed action over local TCP or the authenticated WSS relay. */
+    /** Prefer the verified LAN socket; use PeerJS WebRTC DataChannel outside the LAN. */
     private fun sendWaslaAction(command: String): Boolean {
         synchronized(waslaTvLock) {
             val socket = waslaTvSocket
             val out = waslaTvOutput
             if (socket != null && out != null && !socket.isClosed && socket.isConnected) {
                 try {
-                    out.write("ACTION $command\n".toByteArray(Charsets.UTF_8))
+                    out.write("ACTION $command\\n".toByteArray(Charsets.UTF_8))
                     out.flush()
                     return true
                 } catch (_: Exception) {
@@ -2356,12 +2373,88 @@ class MainActivity : Activity() {
                 }
             }
         }
-        val relay = relaySocket ?: return false
-        if (relayMessageId.get() < 0L) return false
-        val payload = JSONObject().put("type", "action")
-            .put("id", relayMessageId.incrementAndGet().toString())
-            .put("command", command).toString()
-        return try { relay.send(payload) } catch (_: Exception) { false }
+        if (!peerJsConnected) return false
+        val id = relayMessageId.incrementAndGet().toString()
+        val js = "window.WaslaPeer && window.WaslaPeer.send(" +
+            JSONObject.quote(command) + "," + JSONObject.quote(id) + ")"
+        return try {
+            peerJsWebView?.post { peerJsWebView?.evaluateJavascript(js, null) }
+            peerJsWebView != null
+        } catch (_: Exception) { false }
+    }
+
+    private fun initPeerJsWebView() {
+        if (peerJsWebView != null) return
+        try {
+            val web = WebView(this).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                addJavascriptInterface(PeerJsBridge(), "WaslaNative")
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, url: String) {
+                        peerJsPageLoaded = true
+                        val id = peerJsDeviceId
+                        val code = peerJsPairCode
+                        if (id.isNotBlank() && code.isNotBlank()) startPeerJsTransport(id, code)
+                    }
+                }
+            }
+            peerJsWebView = web
+            findViewById<ViewGroup>(android.R.id.content).addView(
+                web, android.widget.FrameLayout.LayoutParams(dp(1), dp(1))
+            )
+            web.loadUrl("file:///android_asset/peerjs-transport.html")
+        } catch (e: Exception) {
+            peerJsConnected = false
+            setStatus("تعذر تهيئة قناة التحكم عبر الإنترنت: ${e.message ?: "WebView غير متاح"}")
+        }
+    }
+
+    private fun startPeerJsTransport(deviceId: String, code: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            runOnUiThread { startPeerJsTransport(deviceId, code) }
+            return
+        }
+        if (!deviceId.matches(Regex("[0-9a-fA-F-]{36}")) || !code.matches(Regex("\\d{6}"))) return
+        peerJsDeviceId = deviceId
+        peerJsPairCode = code
+        peerJsConnected = false
+        if (peerJsWebView == null) initPeerJsWebView()
+        if (!peerJsPageLoaded) return
+        val peerId = "wasla-tv-" + deviceId.replace("-", "").lowercase()
+        val options = JSONObject().put("role", "mobile").put("deviceId", deviceId)
+            .put("pin", code).put("peerId", peerId)
+        peerJsWebView?.evaluateJavascript("window.WaslaPeer && window.WaslaPeer.start($options)", null)
+    }
+
+    private inner class PeerJsBridge {
+        @JavascriptInterface fun onPeerId(id: String) { }
+        @JavascriptInterface fun onPeerStatus(value: String) {
+            runOnUiThread {
+                peerJsConnected = value == "connected"
+                when (value) {
+                    "connected" -> setStatus("اتصال التحكم عبر الإنترنت جاهز")
+                    "disconnected" -> setStatus("انقطع مسار الإنترنت — ستتم إعادة المحاولة")
+                    "library-unavailable" -> setStatus("تعذر تحميل مكتبة الاتصال المجانية — تحقق من الإنترنت")
+                    "signaling-reconnecting" -> setStatus("جارٍ استعادة اتصال وصلة عبر الإنترنت...")
+                }
+            }
+        }
+        @JavascriptInterface fun onPeerReady() {
+            runOnUiThread {
+                peerJsConnected = true
+                setStatus("تم الاتصال بالتلفاز عبر الإنترنت — التحكم جاهز")
+            }
+        }
+        @JavascriptInterface fun onPeerError(value: String) {
+            runOnUiThread { setStatus("تعذر إنشاء اتصال الإنترنت ($value) — سيُعاد المحاولة") }
+        }
+        @JavascriptInterface fun onPeerActionResult(result: String) {
+            runOnUiThread {
+                setStatus(if (result == "ACTION_OK") "تم تنفيذ الأمر على التلفاز"
+                    else "تعذر تنفيذ الأمر على التلفاز: $result")
+            }
+        }
     }
 
     private fun sendWaslaTap(x: Float, y: Float): Boolean {
@@ -2622,6 +2715,13 @@ class MainActivity : Activity() {
         networkCallback = null
         connectionMonitor.shutdownNow()
         closeWaslaReceiver()
+        peerJsConnected = false
+        peerJsWebView?.let { web ->
+            try { web.evaluateJavascript("window.WaslaPeer && window.WaslaPeer.stop()", null) } catch (_: Exception) { }
+            try { (web.parent as? ViewGroup)?.removeView(web) } catch (_: Exception) { }
+            try { web.stopLoading(); web.destroy() } catch (_: Exception) { }
+        }
+        peerJsWebView = null
         disconnectWaslaRelay()
         relayClient.dispatcher.executorService.shutdown()
         relayClient.connectionPool.evictAll()
