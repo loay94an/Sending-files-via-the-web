@@ -80,6 +80,8 @@
       native("onPeerReady", data.controlReady === true);
     } else if (data.type === "action_result") {
       native("onPeerActionResult", String(data.id || ""), String(data.result || ""));
+    } else if (data.type === "screen_signal" && data.payload && typeof data.payload === "object") {
+      native("onPeerScreenSignal", JSON.stringify(data.payload));
     } else if (data.type === "peer-status" && data.status === "disconnected") {
       status("disconnected");
     }
@@ -194,6 +196,8 @@
         if (inFlightActions.size >= 128) inFlightActions.delete(inFlightActions.values().next().value);
         inFlightActions.add(data.id);
         native("onPeerAction", data.command, data.id);
+      } else if (data.type === "screen_signal" && data.payload && typeof data.payload === "object") {
+        native("onPeerScreenSignal", JSON.stringify(data.payload));
       }
     });
     next.on("close", function () {
@@ -294,6 +298,15 @@
           typeof command !== "string" || command.length > 12000) return false;
       try {
         connection.send({ type: "action", id: String(id || Date.now()), command: command });
+        return true;
+      } catch (_) { return false; }
+    },
+    sendScreenSignal: function (payload) {
+      if (!authorized || !connection || !connection.open) return false;
+      try {
+        const signal = typeof payload === "string" ? JSON.parse(payload) : payload;
+        if (!signal || typeof signal !== "object") return false;
+        connection.send({ type: "screen_signal", payload: signal });
         return true;
       } catch (_) { return false; }
     },
