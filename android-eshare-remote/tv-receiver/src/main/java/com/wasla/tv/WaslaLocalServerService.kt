@@ -398,7 +398,8 @@ class WaslaLocalServerService : Service() {
                 val line = reader.readLine() ?: break
                 val response = when {
                     line == "PING" -> "PONG"
-                    line == "INFO" -> "WASLA-TV/1 ${deviceId(this)} ${localIpv4()}"
+                    line == "INFO" -> "WASLA-TV/1 ${deviceId(this)} ${localIpv4()} " +
+                        if (WaslaAccessibilityService.isEnabled()) "CONTROL_READY" else "CONTROL_DISABLED"
                     line.startsWith("ACTION ") -> executeAction(line.removePrefix("ACTION ").trim())
                     else -> "UNKNOWN_COMMAND"
                 }
