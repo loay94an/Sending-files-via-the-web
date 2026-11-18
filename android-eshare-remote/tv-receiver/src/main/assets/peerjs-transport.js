@@ -10,6 +10,9 @@
   let libraryLoading = false;
   let authFailures = 0;
   let authBlockedUntil = 0;
+  // Deduplicate repeated commands and replay completed results.
+  const completedActions = new Map();
+  const inFlightActions = new Set();
 
   function native(name) {
     try {
@@ -76,7 +79,7 @@
       status("connected");
       native("onPeerReady", data.controlReady === true);
     } else if (data.type === "action_result") {
-      native("onPeerActionResult", String(data.result || ""));
+      native("onPeerActionResult", String(data.id || ""), String(data.result || ""));
     } else if (data.type === "peer-status" && data.status === "disconnected") {
       status("disconnected");
     }
@@ -179,18 +182,28 @@
       }
       if (data.type === "action" && typeof data.command === "string" &&
           data.command.length <= 12000 && typeof data.id === "string" && data.id.length <= 40) {
+        if (completedActions.has(data.id)) {
+          try { next.send({ type: "action_result", id: data.id, result: completedActions.get(data.id) }); } catch (_) {}
+          return;
+        }
+        if (inFlightActions.has(data.id)) return;
+        inFlightActions.add(data.id);
         native("onPeerAction", data.command, data.id);
       }
     });
     next.on("close", function () {
-      if (connection === next) connection = null;
-      authorized = false;
-      status("disconnected");
+      if (connection === next) {
+        connection = null;
+        authorized = false;
+        status("disconnected");
+      }
     });
     next.on("error", function () {
-      if (connection === next) connection = null;
-      authorized = false;
-      status("connection-error");
+      if (connection === next) {
+        connection = null;
+        authorized = false;
+        status("connection-error");
+      }
     });
   }
   function createPeer() {
@@ -280,9 +293,15 @@
       } catch (_) { return false; }
     },
     respond: function (id, result) {
+      const actionId = String(id || "");
+      const actionResult = String(result || "");
+      if (!actionId || actionId.length > 40) return false;
+      inFlightActions.delete(actionId);
+      completedActions.set(actionId, actionResult);
+      if (completedActions.size > 128) completedActions.delete(completedActions.keys().next().value);
       if (!authorized || !connection || !connection.open) return false;
       try {
-        connection.send({ type: "action_result", id: String(id || ""), result: String(result || "") });
+        connection.send({ type: "action_result", id: actionId, result: actionResult });
         return true;
       } catch (_) { return false; }
     },
