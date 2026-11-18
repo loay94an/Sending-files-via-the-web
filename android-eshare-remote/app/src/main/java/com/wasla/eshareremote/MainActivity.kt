@@ -2141,7 +2141,7 @@ class MainActivity : Activity() {
                 socket.soTimeout = 5000
                 val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)
                 val writer = socket.getOutputStream().bufferedWriter(Charsets.UTF_8)
-                writer.write("PAIR $code\\n")
+                writer.write("PAIR $code\n")
                 writer.flush()
                 val greeting = reader.readLine()
                 if (greeting?.startsWith("OK WASLA-TV/1") != true) {
@@ -2150,7 +2150,7 @@ class MainActivity : Activity() {
                 }
                 // Bind the scanned QR identity to the endpoint so a stale/forged
                 // QR cannot silently pair with a different receiver on the same IP.
-                writer.write("INFO\\n")
+                writer.write("INFO\n")
                 writer.flush()
                 val info = reader.readLine().orEmpty().split(' ')
                 if (info.size < 3 || info[0] != "WASLA-TV/1" ||
