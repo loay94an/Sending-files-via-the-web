@@ -2277,7 +2277,7 @@ class MainActivity : Activity() {
             val pongAge = android.os.SystemClock.elapsedRealtime() - lastWaslaPongAt
             if (socket != null && out != null && !socket.isClosed && socket.isConnected && pongAge <= 25000L) {
                 try {
-                    out.write("ACTION $command\\n".toByteArray(Charsets.UTF_8))
+                    out.write("ACTION $command\n".toByteArray(Charsets.UTF_8))
                     out.flush()
                     return true
                 } catch (_: Exception) {
