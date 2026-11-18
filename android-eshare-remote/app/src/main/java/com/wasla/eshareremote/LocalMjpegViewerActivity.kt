@@ -173,6 +173,8 @@ class LocalMjpegViewerActivity : Activity() {
     }
 
     private fun stopStream() {
+        retry?.let { handler.removeCallbacks(it) }
+        retry = null
         generation.incrementAndGet()
         running.set(false)
         try { connection?.disconnect() } catch (_: Exception) {}
