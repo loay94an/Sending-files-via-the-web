@@ -120,7 +120,7 @@ class TvReceiverActivity : Activity() {
             setTextColor(0xffffd166.toInt())
         }, match())
         root.addView(TextView(this).apply {
-            text = "يوفر مستقبل وصلة التحكم الأساسي ونقل الملفات إلى المجلد الذي تختاره. للاتصال من خارج الشبكة المحلية، أدخل عنوان خادم وصلة الآمن في إعدادات الإنترنت على الهاتف والتلفاز. بث الشاشة ومشاهدتها في الاتجاهين يحتاجان بعد إلى تنفيذ WebRTC مستقل."
+            text = "للتحكم من خارج الشبكة المحلية يستخدم وصلة PeerJS Cloud المجاني لتبادل إشارات الاتصال فقط، ثم تنتقل أوامر التحكم عبر قناة WebRTC مشفرة بين الهاتف والتلفاز. لا تحتاج إلى حساب أو عنوان خادم خاص. يجب أن يبقى الجهازان متصلين بالإنترنت، وقد تتعذر بعض الاتصالات بسبب قيود NAT. بث صورة الشاشة ليس مفعلاً في هذا الإصدار."
             textSize = 15f
             gravity = Gravity.CENTER
             setTextColor(0xffa8bdd7.toInt())
@@ -176,37 +176,8 @@ class TvReceiverActivity : Activity() {
             gravity = Gravity.CENTER
             setTextColor(0xffffd166.toInt())
         }, match())
-        root.addView(Button(this).apply {
-            text = "إعداد الاتصال الآمن عبر الإنترنت"
-            isAllCaps = false
-            setOnClickListener { configureRelay() }
-        }, match())
         setContentView(root)
     }
-    private fun configureRelay() {
-        val input = EditText(this).apply {
-            isSingleLine = true
-            hint = "https://your-worker.workers.dev"
-            setText(getSharedPreferences("wasla_tv_identity", MODE_PRIVATE).getString("relay_base_url", "") ?: "")
-            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
-        }
-        AlertDialog.Builder(this)
-            .setTitle("خادم وصلة للاتصال عبر الإنترنت")
-            .setMessage("أدخل عنوان Cloudflare Worker بعد نشره. يجب أن يكون اتصالاً آمناً HTTPS.")
-            .setView(input)
-            .setNegativeButton("إلغاء", null)
-            .setPositiveButton("حفظ والاتصال") { _, _ ->
-                val value = input.text.toString().trim().trimEnd('/')
-                getSharedPreferences("wasla_tv_identity", MODE_PRIVATE).edit()
-                    .putString("relay_base_url", value).apply()
-                val service = Intent(this, WaslaLocalServerService::class.java).apply {
-                    action = WaslaLocalServerService.ACTION_RECONNECT_RELAY
-                }
-                if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(service) else startService(service)
-                status.text = if (value.isBlank()) "تم تعطيل إعداد خادم الإنترنت" else "جارٍ الاتصال بخادم وصلة الآمن..."
-            }.show()
-    }
-
     @Deprecated("Deprecated in Android API; retained for minSdk 21 compatibility")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
