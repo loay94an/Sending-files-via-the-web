@@ -138,7 +138,7 @@ class WaslaLocalServerService : Service() {
         web.loadUrl("file:///android_asset/peerjs-transport.html")
     }
 
-    private inner class PeerJsNativeBridge {
+    inner class PeerJsNativeBridge {
         @JavascriptInterface fun onPeerId(id: String) { }
         @JavascriptInterface fun onPeerStatus(value: String) { }
         @JavascriptInterface fun onPeerReady() { }
