@@ -122,7 +122,7 @@ class TvReceiverActivity : Activity() {
             setTextColor(0xffffd166.toInt())
         }, match())
         root.addView(TextView(this).apply {
-            text = "امسح رمز اتصال الهاتف مرة واحدة لحفظ الاقتران. يستخدم وصلة PeerJS المجاني لتبادل إشارات الاتصال فقط، ثم تنتقل أوامر التحكم مباشرة ومشفرة بين الهاتف والتلفاز عبر WebRTC. لا تحتاج إلى حساب أو إعداد خادم أو فتح منافذ. يلزم اتصال الجهازين بالإنترنت، وقد تمنع بعض أنواع الشبكات الاتصال المباشر. يعمل الاتصال المحلي أيضاً عند توفره. بث صورة الشاشة غير مفعّل في هذا الإصدار."
+            text = "امسح رمز اتصال الهاتف مرة واحدة لحفظ الاقتران. يستخدم وصلة PeerJS المجاني لتبادل إشارات الاتصال فقط، ثم تنتقل أوامر التحكم مباشرة ومشفرة بين الهاتف والتلفاز عبر WebRTC. لا تحتاج إلى حساب أو إعداد خادم أو فتح منافذ. يلزم اتصال الجهازين بالإنترنت، وقد تمنع بعض أنواع الشبكات الاتصال المباشر. يعمل الاتصال المحلي أيضاً عند توفره. يمكن تشغيل بث الشاشة المحلي MJPEG بعد موافقتك من نافذة أندرويد؛ البث لا يحتاج خادمًا مدفوعًا."
             textSize = 15f
             gravity = Gravity.CENTER
             setTextColor(0xffa8bdd7.toInt())
@@ -143,6 +143,26 @@ class TvReceiverActivity : Activity() {
             setOnClickListener { checkForUpdates() }
         }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) })
         root.addView(actions, match())
+        root.addView(Button(this).apply {
+            text = "بدء بث شاشة التلفاز إلى الهاتف (MJPEG)"
+            isAllCaps = false
+            setOnClickListener {
+                try {
+                    val manager = getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
+                    startActivityForResult(manager.createScreenCaptureIntent(), 38473)
+                } catch (_: Exception) {
+                    status.text = "تعذر بدء التقاط الشاشة على هذا الجهاز"
+                }
+            }
+        }, match())
+        root.addView(Button(this).apply {
+            text = "إيقاف بث الشاشة"
+            isAllCaps = false
+            setOnClickListener {
+                startService(Intent(this@TvReceiverActivity, WaslaLocalServerService::class.java).setAction(WaslaLocalServerService.ACTION_STOP_SCREEN))
+                status.text = "تم إيقاف بث الشاشة"
+            }
+        }, match())
         root.addView(Button(this).apply {
             text = "اختيار مجلد مشاركة الملفات"
             isAllCaps = false
@@ -183,6 +203,23 @@ class TvReceiverActivity : Activity() {
     @Deprecated("Deprecated in Android API; retained for minSdk 21 compatibility")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 38473) {
+            if (resultCode == RESULT_OK && data != null) {
+                val serviceIntent = Intent(this, WaslaLocalServerService::class.java)
+                    .setAction(WaslaLocalServerService.ACTION_START_SCREEN)
+                    .putExtra(WaslaLocalServerService.EXTRA_RESULT_CODE, resultCode)
+                    .putExtra(WaslaLocalServerService.EXTRA_PERMISSION_DATA, data)
+                try {
+                    if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(serviceIntent) else startService(serviceIntent)
+                    status.text = "تمت الموافقة — جارٍ تشغيل بث MJPEG على المنفذ ${WaslaLocalServerService.SCREEN_PORT}"
+                } catch (_: Exception) {
+                    status.text = "تعذر تشغيل خدمة بث الشاشة"
+                }
+            } else {
+                status.text = "لم تتم الموافقة على مشاركة الشاشة"
+            }
+            return
+        }
         if (requestCode == 38472 && resultCode == RESULT_OK) {
             val uri = data?.data ?: return
             try {
