@@ -2192,7 +2192,8 @@ class MainActivity : Activity() {
                 }, "wasla-tv-link-reader").apply { isDaemon = true; start() }
             } catch (e: Exception) {
                 closeWaslaReceiver()
-                setStatus("تعذر الاتصال بمستقبل وصلة: ${e.message ?: "تحقق من الشبكة ورمز الاقتران"}")
+                setStatus(if (peerJsConnected) "الاتصال المحلي غير متاح، لكن التحكم عبر الإنترنت جاهز"
+                    else "تعذر الاتصال بمستقبل وصلة: ${e.message ?: "تحقق من الشبكة ورمز الاقتران"}")
             } finally {
                 waslaConnecting.set(false)
             }
@@ -2354,10 +2355,11 @@ class MainActivity : Activity() {
                 }
             }
         }
-        @JavascriptInterface fun onPeerReady() {
+        @JavascriptInterface fun onPeerReady(controlReady: Boolean) {
             runOnUiThread {
                 peerJsConnected = true
-                setStatus("تم الاتصال بالتلفاز عبر الإنترنت — التحكم جاهز")
+                setStatus(if (controlReady) "تم الاتصال بالتلفاز عبر الإنترنت — التحكم جاهز"
+                    else "اتصل الهاتف بالتلفاز عبر الإنترنت، لكن يجب تفعيل خدمة وصلة من إعدادات إمكانية الوصول على التلفاز")
             }
         }
         @JavascriptInterface fun onPeerError(value: String) {
