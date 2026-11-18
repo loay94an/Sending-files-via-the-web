@@ -73,6 +73,15 @@ class WaslaWebRtcScreenSender(
 
     @Synchronized fun onSignal(signal: JSONObject) {
         when (signal.optString("type")) {
+            "request" -> {
+                if (started && peerReady) {
+                    try { peerConnection?.close() } catch (_: Exception) {}
+                    try { peerConnection?.dispose() } catch (_: Exception) {}
+                    peerConnection = null
+                    pendingCandidates.clear()
+                    createOffer()
+                }
+            }
             "answer" -> {
                 val sdp = signal.optString("sdp")
                 if (sdp.isBlank()) return
