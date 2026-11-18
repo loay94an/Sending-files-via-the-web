@@ -13,10 +13,13 @@ import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /** LAN MJPEG viewer for the paired Wasla TV receiver. */
 class ScreenViewerActivity : Activity() {
     private val running = AtomicBoolean(false)
+    private val generation = AtomicLong(0L)
+    @Volatile private var displayedBitmap: android.graphics.Bitmap? = null
     @Volatile private var connection: HttpURLConnection? = null
     private lateinit var status: TextView
     private lateinit var image: ImageView
@@ -66,6 +69,7 @@ class ScreenViewerActivity : Activity() {
             status.text = "امسح رمز اقتران وصلة من التلفاز أولاً"
             return
         }
+        val session = generation.incrementAndGet()
         running.set(true)
         status.text = "جارٍ الاتصال ببث الشاشة المحلي..."
         Thread({
@@ -84,7 +88,7 @@ class ScreenViewerActivity : Activity() {
                 if (conn.responseCode != 200) throw IllegalStateException("رفض التلفاز الاتصال (${conn.responseCode})")
                 input = BufferedInputStream(conn.inputStream, 64 * 1024)
                 runOnUiThread { if (running.get()) status.text = "متصل — بث مباشر عبر MJPEG" }
-                while (running.get()) {
+                while (running.get() && generation.get() == session) {
                     var line = readAsciiLine(input) ?: break
                     while (line.isEmpty() && running.get()) line = readAsciiLine(input) ?: break
                     if (!running.get()) break
@@ -101,24 +105,29 @@ class ScreenViewerActivity : Activity() {
                     val bytes = readExactly(input, contentLength)
                     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: continue
                     runOnUiThread {
-                        if (running.get()) image.setImageBitmap(bitmap) else bitmap.recycle()
+                        if (running.get() && generation.get() == session) {
+                            displayedBitmap?.recycle()
+                            displayedBitmap = bitmap
+                            image.setImageBitmap(bitmap)
+                        } else bitmap.recycle()
                     }
                 }
-                if (running.get()) throw IllegalStateException("انتهى بث الشاشة")
+                if (running.get() && generation.get() == session) throw IllegalStateException("انتهى بث الشاشة")
             } catch (e: Exception) {
-                if (running.get()) runOnUiThread {
+                if (running.get() && generation.get() == session) runOnUiThread {
                     status.text = "تعذر عرض الشاشة: ${e.message ?: "تحقق من اتصال الشبكة"}"
                 }
             } finally {
                 try { input?.close() } catch (_: Exception) { }
                 connection?.disconnect()
                 connection = null
-                running.set(false)
+                if (generation.get() == session) running.set(false)
             }
         }, "wasla-mjpeg-viewer").start()
     }
 
     private fun stopStream() {
+        generation.incrementAndGet()
         running.set(false)
         try { connection?.disconnect() } catch (_: Exception) { }
         connection = null
