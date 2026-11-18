@@ -65,6 +65,7 @@ class WaslaLocalServerService : Service() {
     @Volatile private var peerJsPageLoaded = false
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var discoveryThread: Thread? = null
+    @Volatile private var mjpegServer: WaslaMjpegServer? = null
     override fun onCreate() {
         super.onCreate()
         startForeground(NOTIFICATION_ID, buildNotification())
@@ -75,6 +76,30 @@ class WaslaLocalServerService : Service() {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startServer()
+        when (intent?.action) {
+            ACTION_START_SCREEN -> {
+                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
+                val permissionData = if (Build.VERSION.SDK_INT >= 33) {
+                    intent.getParcelableExtra(EXTRA_PERMISSION_DATA, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(EXTRA_PERMISSION_DATA)
+                }
+                if (resultCode == android.app.Activity.RESULT_OK && permissionData != null) {
+                    mjpegServer?.stop()
+                    val stream = WaslaMjpegServer(this, pairCode(this))
+                    if (stream.start(resultCode, permissionData)) {
+                        mjpegServer = stream
+                    } else {
+                        stream.stop()
+                    }
+                }
+            }
+            ACTION_STOP_SCREEN -> {
+                mjpegServer?.stop()
+                mjpegServer = null
+            }
+        }
         return START_STICKY
     }
     private fun startServer() {
@@ -483,6 +508,8 @@ class WaslaLocalServerService : Service() {
     }
     override fun onDestroy() {
         running.set(false)
+        mjpegServer?.stop()
+        mjpegServer = null
         try { listener?.close() } catch (_: Exception) { }
         try { fileListener?.close() } catch (_: Exception) { }
         try { discoverySocket?.close() } catch (_: Exception) { }
@@ -503,6 +530,11 @@ class WaslaLocalServerService : Service() {
         const val PORT = 38471
         const val DISCOVERY_PORT = 38470
         const val FILE_PORT = 38472
+        const val SCREEN_PORT = WaslaMjpegServer.SCREEN_PORT
+        const val ACTION_START_SCREEN = "com.wasla.tv.START_SCREEN_STREAM"
+        const val ACTION_STOP_SCREEN = "com.wasla.tv.STOP_SCREEN_STREAM"
+        const val EXTRA_RESULT_CODE = "screen_result_code"
+        const val EXTRA_PERMISSION_DATA = "screen_permission_data"
         private const val MAX_FILE_BYTES = 536870912L
         const val DISCOVERY_REQUEST = "WASLA_DISCOVER/1"
         private const val CHANNEL = "wasla_tv_server"
