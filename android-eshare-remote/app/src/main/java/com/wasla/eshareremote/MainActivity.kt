@@ -96,6 +96,7 @@ class MainActivity : Activity() {
     @Volatile private var peerJsDeviceId = ""
     @Volatile private var peerJsPairCode = ""
     private val peerJsMessageId = AtomicLong(0L)
+    private val peerActionTimeouts = java.util.concurrent.ConcurrentHashMap<String, Runnable>()
     private var pendingGyroPosition: Pair<Float, Float>? = null
     private var gyroPositionWriteQueued = false
     private var lastTouchMoveAt = 0L
@@ -2298,13 +2299,32 @@ class MainActivity : Activity() {
             }
         }
         if (!peerJsConnected) return false
+        val web = peerJsWebView ?: return false
         val id = peerJsMessageId.incrementAndGet().toString()
+        val timeout = Runnable {
+            peerActionTimeouts.remove(id)
+            setStatus("لم يصل تأكيد تنفيذ الأمر من التلفاز — تحقق من الاتصال")
+        }
+        peerActionTimeouts.put(id, timeout)?.let { gestureHandler.removeCallbacks(it) }
+        gestureHandler.postDelayed(timeout, 10000L)
         val js = "window.WaslaPeer && window.WaslaPeer.send(" +
             JSONObject.quote(command) + "," + JSONObject.quote(id) + ")"
         return try {
-            peerJsWebView?.post { peerJsWebView?.evaluateJavascript(js, null) }
-            peerJsWebView != null
-        } catch (_: Exception) { false }
+            web.post {
+                web.evaluateJavascript(js) { result ->
+                    if (result != "true") {
+                        peerActionTimeouts.remove(id)?.let { gestureHandler.removeCallbacks(it) }
+                        runOnUiThread { setStatus("تعذر إرسال الأمر عبر قناة الإنترنت — لم يؤكد الاتصال استلامه") }
+                    } else {
+                        runOnUiThread { setStatus("جارٍ تنفيذ الأمر على التلفاز…") }
+                    }
+                }
+            }
+            true
+        } catch (_: Exception) {
+            peerActionTimeouts.remove(id)?.let { gestureHandler.removeCallbacks(it) }
+            false
+        }
     }
 
     private fun initPeerJsWebView() {
@@ -2374,8 +2394,9 @@ class MainActivity : Activity() {
         @JavascriptInterface fun onPeerError(value: String) {
             runOnUiThread { setStatus("تعذر إنشاء اتصال الإنترنت ($value) — سيُعاد المحاولة") }
         }
-        @JavascriptInterface fun onPeerActionResult(result: String) {
+        @JavascriptInterface fun onPeerActionResult(id: String, result: String) {
             runOnUiThread {
+                peerActionTimeouts.remove(id)?.let { gestureHandler.removeCallbacks(it) }
                 setStatus(if (result == "ACTION_OK") "تم تنفيذ الأمر على التلفاز"
                     else "تعذر تنفيذ الأمر على التلفاز: $result")
             }
