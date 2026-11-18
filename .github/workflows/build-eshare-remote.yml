@@ -2,7 +2,7 @@ name: Build Wasla EShare Remote APK
 
 on:
   push:
-    branches: [feat/eshare-arabic-remote, fix/eshare-hotspot-airmouse, fix/airmouse-protocol-scaling, fix/pointer-click-protocol, feat/eshare-text-longpress-reconnect, feat/wasla-tv-server-foundation, feat/wasla-functional-receiver-phase1, feat/wasla-stable-discovery-ip-picker, feat/wasla-persistent-connection-recovery]
+    branches: [feat/eshare-arabic-remote, fix/eshare-hotspot-airmouse, fix/airmouse-protocol-scaling, fix/pointer-click-protocol, feat/eshare-text-longpress-reconnect, feat/wasla-tv-server-foundation, feat/wasla-functional-receiver-phase1, feat/wasla-stable-discovery-ip-picker, feat/wasla-persistent-connection-recovery, fix/wasla-connection-health-checks]
     tags: ["v*"]
     paths:
       - "android-eshare-remote/**"
@@ -61,7 +61,7 @@ jobs:
           path: android-eshare-remote/tv-receiver/build/outputs/apk/debug/tv-receiver-debug.apk
           if-no-files-found: error
       - name: Prepare release APKs
-        if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/feat/wasla-functional-receiver-phase1' || github.ref == 'refs/heads/feat/wasla-stable-discovery-ip-picker' || github.ref == 'refs/heads/feat/wasla-persistent-connection-recovery')
+        if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/feat/wasla-functional-receiver-phase1' || github.ref == 'refs/heads/feat/wasla-stable-discovery-ip-picker' || github.ref == 'refs/heads/feat/wasla-persistent-connection-recovery' || github.ref == 'refs/heads/fix/wasla-connection-health-checks')
         run: |
           mkdir -p release-assets
           cp android-eshare-remote/app/build/outputs/apk/debug/app-debug.apk "release-assets/wasla-eshare-remote-v${{ steps.app-version.outputs.name }}.apk"

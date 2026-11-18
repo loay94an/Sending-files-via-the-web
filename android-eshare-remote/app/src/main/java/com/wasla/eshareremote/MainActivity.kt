@@ -58,22 +58,17 @@ class MainActivity : Activity() {
     private val networkRecoveryHandler = Handler(Looper.getMainLooper())
     @Volatile private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var lastDefaultNetwork: Network? = null
+    private val availableLocalNetworks = java.util.concurrent.ConcurrentHashMap.newKeySet<Network>()
     private val networkRecoveryTask = Runnable {
-        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val active = manager.activeNetwork
-        val caps = active?.let { manager.getNetworkCapabilities(it) }
-        val hasUsableNetwork = caps?.let {
-            it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-        } == true
-        // A route change invalidates the old TCP socket, but never discard the
-        // selected TV or start a subnet scan during automatic recovery.
-        closeConnection()
-        if (hasUsableNetwork) {
+        // Network callbacks are informational only while the current EShare
+        // socket is alive. Never replace a working session because Android
+        // reports a route/default-network transition.
+        if (hasActiveEshareSession()) return@Runnable
+        if (availableLocalNetworks.isNotEmpty()) {
             nextReconnectAt = 0L
-            scheduleAutomaticReconnect("تغيّرت الشبكة — إعادة الاتصال بنفس الشاشة", immediate = true)
+            scheduleAutomaticReconnect("عادت الشبكة المحلية — استعادة الشاشة المحددة", immediate = true)
         } else {
-            setStatus("الشبكة غير متاحة — سيُعاد الاتصال بنفس الشاشة عند عودتها")
+            setStatus("الشبكة غير متاحة — سيُستعاد الاتصال عند عودتها")
         }
     }
     private val reconnecting = AtomicBoolean(false)
@@ -105,8 +100,8 @@ class MainActivity : Activity() {
     private var lastTouchMoveAt = 0L
     private var pendingTouchDx = 0f
     private var pendingTouchDy = 0f
-    private var tcp: Socket? = null
-    private var output: OutputStream? = null
+    @Volatile private var tcp: Socket? = null
+    @Volatile private var output: OutputStream? = null
     @Volatile private var localHttpServer: ServerSocket? = null
     @Volatile private var localHttpThread: Thread? = null
     private var discoveryLock: WifiManager.MulticastLock? = null
@@ -270,7 +265,8 @@ class MainActivity : Activity() {
         }
         connectButton = makeButton("اتصال", 40, true).apply {
             textSize = 13f
-            setOnClickListener { discoverWaslaThenEShare() }
+            // Manual Connect always starts a fresh scan; automatic recovery stays pinned.
+            setOnClickListener { discoverWaslaThenEShare(interactive = true) }
             setOnLongClickListener {
                 discoverWaslaThenEShare(interactive = true)
                 true
@@ -1779,6 +1775,15 @@ class MainActivity : Activity() {
     }
 
     private fun connect(device: Device) = synchronized(connectionLock) {
+        // Preserve the current healthy session. A new TCP session is created
+        // only after the old one is confirmed closed or the user selects a
+        // different endpoint through the explicit discovery flow.
+        val active = tcp
+        val activeIp = (active?.remoteSocketAddress as? InetSocketAddress)?.address?.hostAddress
+        val activePort = (active?.remoteSocketAddress as? InetSocketAddress)?.port
+        if (active != null && !active.isClosed && active.isConnected &&
+            !active.isInputShutdown && !active.isOutputShutdown &&
+            activeIp == device.ip && activePort == device.port) return@synchronized
         closeConnection()
         val httpPort = ensureLocalHttpServer()
         val socket = Socket()
@@ -1812,11 +1817,20 @@ class MainActivity : Activity() {
                 gyroCursorX = width / 2f
                 gyroCursorY = height / 2f
             }
-        } catch (_: Exception) {
-            // Keep the remote usable on firmware that omits one optional handshake reply.
+        } catch (e: Exception) {
+            // A failed socket write/handshake must never be reported as connected.
+            try { socket.close() } catch (_: Exception) { }
+            if (tcp === socket) {
+                tcp = null
+                output = null
+            }
+            throw e
         } finally {
             try { socket.soTimeout = 0 } catch (_: Exception) { }
         }
+        // A successful handshake is the single point at which this session becomes
+        // authoritative. Cancel any delayed network-recovery work and reset retry state.
+        networkRecoveryHandler.removeCallbacks(networkRecoveryTask)
         lastEshareKeepAliveAt = android.os.SystemClock.elapsedRealtime()
         startSocketReader(socket)
         reconnectAttempts = 0
@@ -2144,6 +2158,7 @@ class MainActivity : Activity() {
                     socket.close()
                     throw IllegalStateException("هوية مستقبل وصلة لا تطابق رمز QR")
                 }
+                val controlReady = info.getOrNull(3) == "CONTROL_READY"
                 socket.soTimeout = 20000
                 synchronized(waslaTvLock) {
                     waslaTvSocket = socket
@@ -2155,7 +2170,10 @@ class MainActivity : Activity() {
                 prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code)
                     .putString("wasla_tv_id", expectedDeviceId ?: "").apply()
                 runOnUiThread { connectionIpLabel?.text = "⌁  $ip" }
-                setStatus("متصل بمستقبل وصلة على التلفاز — اتصال محلي")
+                setStatus(
+                    if (controlReady) "تم الاقتران والتحكم جاهز — $ip"
+                    else "تم الاقتران، لكن التحكم غير مفعّل على التلفاز. افتح وصلة TV وفعّل خدمة إمكانية الوصول."
+                )
                 connectWaslaRelay()
                 Thread({
                     try {
@@ -2450,45 +2468,67 @@ class MainActivity : Activity() {
         val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                val previous = lastDefaultNetwork
+                availableLocalNetworks.add(network)
                 lastDefaultNetwork = network
-                if (previous != null && previous != network) {
-                    scheduleNetworkRecovery("تغيّر اتصال الشبكة")
-                } else if (tcp == null && !reconnecting.get()) {
+                // Do not disturb a live EShare socket on route changes.
+                if (!hasActiveEshareSession() && !reconnecting.get()) {
                     scheduleNetworkRecovery("عودة اتصال الشبكة")
                 }
             }
             override fun onLost(network: Network) {
+                availableLocalNetworks.remove(network)
                 if (lastDefaultNetwork == network) lastDefaultNetwork = null
-                scheduleNetworkRecovery("فُقد اتصال الشبكة")
+                // A local-network callback is not proof that the existing
+                // TCP route died. Keep the session; retry only after socket loss.
+                if (availableLocalNetworks.isEmpty() && !hasActiveEshareSession()) {
+                    scheduleNetworkRecovery("فُقد اتصال الشبكة المحلية")
+                }
             }
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-                if (network == lastDefaultNetwork && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && tcp == null && !reconnecting.get()) {
-                    scheduleNetworkRecovery("تغيّرت خصائص الشبكة")
+                val isLocal = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                if (isLocal) availableLocalNetworks.add(network)
+                else availableLocalNetworks.remove(network)
+                if (isLocal && !hasActiveEshareSession() && !reconnecting.get()) {
+                    scheduleNetworkRecovery("عادت شبكة Wi-Fi المحلية")
                 }
             }
         }
         try {
-            if (android.os.Build.VERSION.SDK_INT >= 24) {
-                manager.registerDefaultNetworkCallback(callback)
-            } else {
-                // Local-only Wi-Fi still supports TV discovery without internet.
-                val request = NetworkRequest.Builder()
-                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                    .build()
-                manager.registerNetworkCallback(request, callback)
-            }
+            // Observe local transports directly; Wi-Fi without internet is still
+            // a valid route to a TV and must not be considered disconnected.
+            val request = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+                .build()
+            manager.registerNetworkCallback(request, callback)
             networkCallback = callback
-            lastDefaultNetwork = manager.activeNetwork
+            lastDefaultNetwork = null
+            for (network in manager.allNetworks) {
+                val caps = manager.getNetworkCapabilities(network)
+                if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true ||
+                    caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true) {
+                    availableLocalNetworks.add(network)
+                    lastDefaultNetwork = network
+                }
+            }
         } catch (e: Exception) {
             setStatus("تعذرت مراقبة تغيّر الشبكة: " + (e.message ?: "سيستمر البحث التلقائي"))
         }
     }
 
     private fun scheduleNetworkRecovery(reason: String) {
+        if (hasActiveEshareSession()) return
         networkRecoveryHandler.removeCallbacks(networkRecoveryTask)
         setStatus(reason + " — جارٍ تجهيز إعادة الاتصال...")
         networkRecoveryHandler.postDelayed(networkRecoveryTask, 1400L)
+    }
+
+    /** A healthy session wins over discovery, callbacks, and retry timers. */
+    private fun hasActiveEshareSession(): Boolean {
+        val socket = tcp ?: return false
+        return !socket.isClosed && socket.isConnected &&
+            !socket.isInputShutdown && !socket.isOutputShutdown
     }
 
     private fun startConnectionMonitor() {
@@ -2496,20 +2536,21 @@ class MainActivity : Activity() {
         // against that exact IP/port; automatic recovery must never select another TV.
         connectionMonitor.scheduleWithFixedDelay({
             val socket = tcp
-            if (socket != null && !socket.isClosed && socket.isConnected && !socket.isOutputShutdown) {
+            if (hasActiveEshareSession() && socket != null) {
                 val now = android.os.SystemClock.elapsedRealtime()
                 if (now - lastEshareKeepAliveAt >= 15000L) {
                     try {
                         synchronized(socketWriteLock) {
                             if (tcp === socket && !socket.isClosed) {
                                 val stream = output ?: throw IllegalStateException("قناة التحكم مغلقة")
-                                stream.write("GETFBINFO\\r\\n1\\r\\n\\r\\n".toByteArray(Charsets.UTF_8))
+                                stream.write("GETFBINFO\r\n1\r\n\r\n".toByteArray(Charsets.UTF_8))
                                 stream.flush()
                                 lastEshareKeepAliveAt = now
                             }
                         }
                     } catch (_: Exception) {
                         closeConnection()
+                        nextReconnectAt = 0L
                         setStatus("انقطع الاتصال — جارٍ استعادته إلى الشاشة نفسها...")
                     }
                 }
@@ -2524,6 +2565,13 @@ class MainActivity : Activity() {
      * for an explicit Connect tap; background recovery never changes the TV.
      */
     private fun scheduleAutomaticReconnect(reason: String, immediate: Boolean = false) {
+        // Never enqueue a retry while a working EShare session is already owned.
+        if (hasActiveEshareSession()) {
+            reconnectAttempts = 0
+            nextReconnectAt = 0L
+            networkRecoveryHandler.removeCallbacks(networkRecoveryTask)
+            return
+        }
         val ip = prefs.getString("ip", "") ?: ""
         if (ip.isBlank() || isFinishing) return
         val now = android.os.SystemClock.elapsedRealtime()
@@ -2533,8 +2581,10 @@ class MainActivity : Activity() {
         setStatus("$reason — جارٍ الاتصال بـ $ip:$port")
         io.execute {
             try {
+                // Re-check on the serialized I/O thread: a manual connection may
+                // have succeeded after this retry was queued.
                 val active = tcp
-                if (active != null && !active.isClosed && active.isConnected && !active.isOutputShutdown) {
+                if (hasActiveEshareSession() && active != null) {
                     reconnectAttempts = 0
                     return@execute
                 }
