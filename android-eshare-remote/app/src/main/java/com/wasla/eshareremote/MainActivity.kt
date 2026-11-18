@@ -2274,7 +2274,8 @@ class MainActivity : Activity() {
         synchronized(waslaTvLock) {
             val socket = waslaTvSocket
             val out = waslaTvOutput
-            if (socket != null && out != null && !socket.isClosed && socket.isConnected) {
+            val pongAge = android.os.SystemClock.elapsedRealtime() - lastWaslaPongAt
+            if (socket != null && out != null && !socket.isClosed && socket.isConnected && pongAge <= 25000L) {
                 try {
                     out.write("ACTION $command\\n".toByteArray(Charsets.UTF_8))
                     out.flush()
@@ -2282,6 +2283,8 @@ class MainActivity : Activity() {
                 } catch (_: Exception) {
                     closeWaslaReceiver()
                 }
+            } else if (socket != null && pongAge > 25000L) {
+                closeWaslaReceiver()
             }
         }
         if (!peerJsConnected) return false
@@ -2338,7 +2341,7 @@ class MainActivity : Activity() {
         peerJsWebView?.evaluateJavascript("window.WaslaPeer && window.WaslaPeer.start($options)", null)
     }
 
-    private inner class PeerJsBridge {
+    inner class PeerJsBridge {
         @JavascriptInterface fun onPeerId(id: String) { }
         @JavascriptInterface fun onPeerStatus(value: String) {
             runOnUiThread {
@@ -2386,11 +2389,11 @@ class MainActivity : Activity() {
     private fun sendPointerHold(pressed: Boolean) {
         val x = gyroCursorX
         val y = gyroCursorY
-        if (pressed && waslaTvSocket != null) {
+        if (pressed && (waslaTvSocket != null || peerJsConnected)) {
             val nx = (x / framebufferWidth.coerceAtLeast(1f) * 10000f).toInt().coerceIn(0, 10000)
             val ny = (y / framebufferHeight.coerceAtLeast(1f) * 10000f).toInt().coerceIn(0, 10000)
             if (sendWaslaAction("LONG_PRESS $nx $ny 700")) return
-        } else if (!pressed && waslaTvSocket != null) return
+        } else if (!pressed && (waslaTvSocket != null || peerJsConnected)) return
         val action = if (pressed) 0 else 1
         airMouseIo.execute {
             try {
