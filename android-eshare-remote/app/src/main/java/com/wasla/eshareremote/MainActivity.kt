@@ -93,6 +93,7 @@ class MainActivity : Activity() {
     private val tvFolderStack = mutableListOf<String>()
     private val relayClient = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
     @Volatile private var relaySocket: WebSocket? = null
+    @Volatile private var relayPeerConnected = false
     private val relayConnecting = AtomicBoolean(false)
     private val relayMessageId = AtomicLong(0L)
     private var pendingGyroPosition: Pair<Float, Float>? = null
@@ -2115,10 +2116,26 @@ class MainActivity : Activity() {
             val code = uri.getQueryParameter("code").orEmpty()
             val port = uri.getQueryParameter("port")?.toIntOrNull()
             val deviceId = uri.getQueryParameter("id").orEmpty()
-            if (ip.isBlank() || port != 38471 || !code.matches(Regex("\\d{6}")) || deviceId.isBlank()) {
+            val relayBase = uri.getQueryParameter("relay").orEmpty().trim().trimEnd('/')
+            if (ip.isBlank() || port != 38471 || !code.matches(Regex("\\d{6}")) ||
+                !deviceId.matches(Regex("[0-9a-fA-F-]{36}"))) {
                 throw IllegalArgumentException("بيانات الاقتران غير مكتملة أو غير صالحة")
             }
-            setStatus("تمت قراءة رمز الشاشة — جارٍ الاقتران...")
+            if (relayBase.isNotBlank() &&
+                !relayBase.startsWith("https://", true) && !relayBase.startsWith("wss://", true)) {
+                throw IllegalArgumentException("عنوان خادم الإنترنت داخل QR غير آمن")
+            }
+            // Save the QR credentials before LAN connection; this permits relay-only pairing
+            // when the phone scans the TV code from a different network.
+            prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code)
+                .putString("wasla_tv_id", deviceId).apply()
+            if (relayBase.isNotBlank()) {
+                prefs.edit().putString("relay_base_url", relayBase).apply()
+                connectWaslaRelay()
+            }
+            setStatus(if (relayBase.isNotBlank())
+                "تمت قراءة الرمز — جارٍ الاتصال المحلي والإنترنت..."
+            else "تمت قراءة رمز الشاشة — جارٍ الاقتران المحلي...")
             connectWaslaReceiver(ip, code, deviceId)
         } catch (e: Exception) {
             setStatus("تعذر قراءة رمز وصلة: ${e.message ?: "رمز غير صالح"}")
@@ -2277,7 +2294,7 @@ class MainActivity : Activity() {
     }
 
     private fun connectWaslaRelay() {
-        if (!relayConnecting.compareAndSet(false, true)) return
+        if (relaySocket != null || !relayConnecting.compareAndSet(false, true)) return
         val base = prefs.getString("relay_base_url", "")?.trim()?.trimEnd('/') ?: ""
         val deviceId = prefs.getString("wasla_tv_id", "") ?: ""
         val code = prefs.getString("wasla_tv_code", "") ?: ""
@@ -2308,7 +2325,8 @@ class MainActivity : Activity() {
         relaySocket = relayClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 relayConnecting.set(false)
-                setStatus("اتصال وصلة عبر الإنترنت جاهز")
+                relayPeerConnected = false
+                setStatus("تم الوصول إلى خادم وصلة — بانتظار اتصال التلفاز")
             }
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
@@ -2316,18 +2334,26 @@ class MainActivity : Activity() {
                     when (msg.optString("type")) {
                         "action_result" -> setStatus(if (msg.optString("result") == "ACTION_OK")
                             "تم تنفيذ الأمر عبر الإنترنت" else "تعذر تنفيذ الأمر عبر الإنترنت: ${msg.optString("result")}")
-                        "peer-status" -> setStatus("انقطع اتصال مستقبل التلفاز عبر الإنترنت")
+                        "peer-status" -> if (msg.optString("role") == "tv") {
+                            relayPeerConnected = msg.optString("status") == "connected"
+                            setStatus(if (relayPeerConnected)
+                                "اتصال التلفاز عبر الإنترنت جاهز"
+                            else "التلفاز غير متصل بخادم الإنترنت حالياً")
+                        }
+                        "error" -> setStatus("خادم وصلة رفض رسالة: ${msg.optString("error")}")
                     }
                 } catch (_: Exception) { }
             }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (relaySocket === webSocket) relaySocket = null
+                relayPeerConnected = false
                 relayConnecting.set(false)
                 setStatus("تعذر الاتصال بخادم وصلة عبر الإنترنت — ستتم إعادة المحاولة")
                 if (!isFinishing) gestureHandler.postDelayed({ connectWaslaRelay() }, 8000L)
             }
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (relaySocket === webSocket) relaySocket = null
+                relayPeerConnected = false
                 relayConnecting.set(false)
                 if (!isFinishing && prefs.getString("relay_base_url", "").orEmpty().isNotBlank()) {
                     gestureHandler.postDelayed({ connectWaslaRelay() }, 5000L)
@@ -2337,16 +2363,18 @@ class MainActivity : Activity() {
     }
 
     private fun disconnectWaslaRelay() {
+        relayPeerConnected = false
         try { relaySocket?.close(1000, "Relay disabled") } catch (_: Exception) { }
         relaySocket = null
     }
 
-    /** Sends an allow-listed action over local TCP or the authenticated WSS relay. */
+    /** Prefer a recently verified LAN socket; otherwise route through the authenticated internet relay. */
     private fun sendWaslaAction(command: String): Boolean {
         synchronized(waslaTvLock) {
             val socket = waslaTvSocket
             val out = waslaTvOutput
-            if (socket != null && out != null && !socket.isClosed && socket.isConnected) {
+            val pongAge = android.os.SystemClock.elapsedRealtime() - lastWaslaPongAt
+            if (socket != null && out != null && !socket.isClosed && socket.isConnected && pongAge <= 25000L) {
                 try {
                     out.write("ACTION $command\n".toByteArray(Charsets.UTF_8))
                     out.flush()
@@ -2354,10 +2382,12 @@ class MainActivity : Activity() {
                 } catch (_: Exception) {
                     closeWaslaReceiver()
                 }
+            } else if (socket != null && pongAge > 25000L) {
+                closeWaslaReceiver()
             }
         }
         val relay = relaySocket ?: return false
-        if (relayMessageId.get() < 0L) return false
+        if (!relayPeerConnected || relayMessageId.get() < 0L) return false
         val payload = JSONObject().put("type", "action")
             .put("id", relayMessageId.incrementAndGet().toString())
             .put("command", command).toString()
