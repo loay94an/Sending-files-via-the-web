@@ -31,6 +31,7 @@ class WaslaMjpegServer(
 ) {
     private val active = AtomicBoolean(false)
     private val lastEncodedAt = AtomicLong(0L)
+    private val encodingFrame = AtomicBoolean(false)
     private val workers = Executors.newCachedThreadPool()
     private val encoder = Executors.newSingleThreadExecutor()
     @Volatile private var latestJpeg: ByteArray? = null
@@ -47,8 +48,10 @@ class WaslaMjpegServer(
             val mediaProjection = manager.getMediaProjection(resultCode, data) ?: return false
             projection = mediaProjection
             val metrics = context.resources.displayMetrics
-            val width = metrics.widthPixels.coerceIn(320, 3840)
-            val height = metrics.heightPixels.coerceIn(240, 2160)
+            val sourceWidth = metrics.widthPixels.coerceIn(320, 3840)
+            val sourceHeight = metrics.heightPixels.coerceIn(240, 2160)
+            val width = minOf(sourceWidth, 1280)
+            val height = (sourceHeight.toFloat() * width / sourceWidth).toInt().coerceAtLeast(240)
             val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3)
             imageReader = reader
             reader.setOnImageAvailableListener({ source ->
@@ -59,7 +62,12 @@ class WaslaMjpegServer(
                     return@setOnImageAvailableListener
                 }
                 lastEncodedAt.set(now)
-                encoder.execute {
+                if (!encodingFrame.compareAndSet(false, true)) {
+                    image.close()
+                    return@setOnImageAvailableListener
+                }
+                try {
+                    encoder.execute {
                     try {
                         val plane = image.planes[0]
                         val pixelStride = plane.pixelStride
@@ -78,19 +86,20 @@ class WaslaMjpegServer(
                             }
                         }
                         val frame = Bitmap.createBitmap(rgba, width, height, Bitmap.Config.ARGB_8888)
-                        val scaledWidth = minOf(width, 1280)
-                        val scaledHeight = (height.toFloat() * scaledWidth / width).toInt().coerceAtLeast(1)
-                        val scaled = if (scaledWidth == width) frame else Bitmap.createScaledBitmap(frame, scaledWidth, scaledHeight, true)
                         val bytes = java.io.ByteArrayOutputStream()
-                        scaled.compress(Bitmap.CompressFormat.JPEG, 68, bytes)
+                        frame.compress(Bitmap.CompressFormat.JPEG, 68, bytes)
                         latestJpeg = bytes.toByteArray()
-                        if (scaled !== frame) scaled.recycle()
                         frame.recycle()
                     } catch (_: Exception) {
                         // A transient frame conversion failure should not stop capture.
                     } finally {
                         image.close()
+                        encodingFrame.set(false)
                     }
+                    }
+                } catch (_: Exception) {
+                    image.close()
+                    encodingFrame.set(false)
                 }
             }, mainHandler)
             mediaProjection.registerCallback(object : MediaProjection.Callback() {
