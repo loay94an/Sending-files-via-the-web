@@ -35,4 +35,6 @@ android {
 dependencies {
     implementation("com.google.zxing:core:3.5.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Native WebRTC engine for receiving the TV MediaProjection video track.
+    implementation("io.github.webrtc-sdk:android:150.7871.04")
 }
