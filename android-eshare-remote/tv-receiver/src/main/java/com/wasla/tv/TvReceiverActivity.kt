@@ -72,13 +72,18 @@ class TvReceiverActivity : Activity() {
             gravity = Gravity.CENTER
             setTextColor(0xffa8bdd7.toInt())
         }, match())
-        val pairPayload = Uri.Builder()
+        val relayBaseUrl = getSharedPreferences("wasla_tv_identity", MODE_PRIVATE)
+            .getString("relay_base_url", "").orEmpty().trim().trimEnd('/')
+        val pairBuilder = Uri.Builder()
             .scheme("wasla").authority("pair")
             .appendQueryParameter("ip", WaslaLocalServerService.localIpv4())
             .appendQueryParameter("port", WaslaLocalServerService.PORT.toString())
             .appendQueryParameter("code", WaslaLocalServerService.pairCode(this))
             .appendQueryParameter("id", WaslaLocalServerService.deviceId(this))
-            .build().toString()
+        if (relayBaseUrl.startsWith("https://", true) || relayBaseUrl.startsWith("wss://", true)) {
+            pairBuilder.appendQueryParameter("relay", relayBaseUrl)
+        }
+        val pairPayload = pairBuilder.build().toString()
         val mobileDownloadUrl = "https://github.com/loay94an/wasla/releases/latest"
         val qrRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -120,7 +125,10 @@ class TvReceiverActivity : Activity() {
             setTextColor(0xffffd166.toInt())
         }, match())
         root.addView(TextView(this).apply {
-            text = "يوفر مستقبل وصلة التحكم الأساسي ونقل الملفات إلى المجلد الذي تختاره. للاتصال من خارج الشبكة المحلية، أدخل عنوان خادم وصلة الآمن في إعدادات الإنترنت على الهاتف والتلفاز. بث الشاشة ومشاهدتها في الاتجاهين يحتاجان بعد إلى تنفيذ WebRTC مستقل."
+            text = if (relayBaseUrl.isNotBlank())
+                "خادم التحكم المحلي يعمل. تم تضمين عنوان خادم الإنترنت في رمز الاقتران؛ بعد مسحه سيتصل الهاتف بالخادم الآمن تلقائياً. يلزم بقاء التلفاز متصلاً بالإنترنت. بث الشاشة يحتاج إلى تنفيذ WebRTC مستقل."
+            else
+                "التحكم المحلي ونقل الملفات متاحان داخل الشبكة. للتحكم من خارج المنزل، اضبط عنوان خادم وصلة الآمن هنا أولاً؛ سيُضاف تلقائياً إلى رمز QR. بث الشاشة يحتاج إلى تنفيذ WebRTC مستقل."
             textSize = 15f
             gravity = Gravity.CENTER
             setTextColor(0xffa8bdd7.toInt())
@@ -204,6 +212,7 @@ class TvReceiverActivity : Activity() {
                 }
                 if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(service) else startService(service)
                 status.text = if (value.isBlank()) "تم تعطيل إعداد خادم الإنترنت" else "جارٍ الاتصال بخادم وصلة الآمن..."
+                render() // Regenerate the pairing QR so it carries the saved relay URL.
             }.show()
     }
 

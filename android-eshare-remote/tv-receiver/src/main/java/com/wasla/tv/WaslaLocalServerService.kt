@@ -67,6 +67,13 @@ class WaslaLocalServerService : Service() {
     @Volatile private var relaySocket: WebSocket? = null
     private val relayHandler = Handler(Looper.getMainLooper())
     private val relayReconnect = Runnable { connectRelayIfConfigured() }
+    private val relayWatchdog = object : Runnable {
+        override fun run() {
+            if (!running.get()) return
+            if (relaySocket == null) connectRelayIfConfigured()
+            relayHandler.postDelayed(this, 15000L)
+        }
+    }
     @Volatile private var discoveryThread: Thread? = null
     override fun onCreate() {
         super.onCreate()
@@ -75,6 +82,7 @@ class WaslaLocalServerService : Service() {
         startFileServer()
         startDiscoveryResponder()
         connectRelayIfConfigured()
+        relayHandler.postDelayed(relayWatchdog, 15000L)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startServer()
@@ -498,6 +506,7 @@ class WaslaLocalServerService : Service() {
         acceptThread?.interrupt()
         discoveryThread?.interrupt()
         relayHandler.removeCallbacks(relayReconnect)
+        relayHandler.removeCallbacks(relayWatchdog)
         try { relaySocket?.close(1000, "TV receiver stopped") } catch (_: Exception) { }
         relaySocket = null
         relayClient.dispatcher.executorService.shutdown()
