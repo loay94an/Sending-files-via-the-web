@@ -64,10 +64,20 @@ class WaslaMjpegServer(
                         val plane = image.planes[0]
                         val pixelStride = plane.pixelStride
                         val rowStride = plane.rowStride
-                        val paddedWidth = (rowStride / pixelStride).coerceAtLeast(width)
-                        val padded = Bitmap.createBitmap(paddedWidth, height, Bitmap.Config.ARGB_8888)
-                        padded.copyPixelsFromBuffer(plane.buffer)
-                        val frame = if (paddedWidth == width) padded else Bitmap.createBitmap(padded, 0, 0, width, height)
+                        val buffer = plane.buffer
+                        val rgba = IntArray(width * height)
+                        for (y in 0 until height) {
+                            val rowOffset = y * rowStride
+                            for (x in 0 until width) {
+                                val offset = rowOffset + x * pixelStride
+                                val red = buffer.get(offset).toInt() and 0xff
+                                val green = buffer.get(offset + 1).toInt() and 0xff
+                                val blue = buffer.get(offset + 2).toInt() and 0xff
+                                val alpha = buffer.get(offset + 3).toInt() and 0xff
+                                rgba[y * width + x] = (alpha shl 24) or (red shl 16) or (green shl 8) or blue
+                            }
+                        }
+                        val frame = Bitmap.createBitmap(rgba, width, height, Bitmap.Config.ARGB_8888)
                         val scaledWidth = minOf(width, 1280)
                         val scaledHeight = (height.toFloat() * scaledWidth / width).toInt().coerceAtLeast(1)
                         val scaled = if (scaledWidth == width) frame else Bitmap.createScaledBitmap(frame, scaledWidth, scaledHeight, true)
@@ -75,8 +85,7 @@ class WaslaMjpegServer(
                         scaled.compress(Bitmap.CompressFormat.JPEG, 68, bytes)
                         latestJpeg = bytes.toByteArray()
                         if (scaled !== frame) scaled.recycle()
-                        if (frame !== padded) frame.recycle()
-                        padded.recycle()
+                        frame.recycle()
                     } catch (_: Exception) {
                         // A transient frame conversion failure should not stop capture.
                     } finally {
