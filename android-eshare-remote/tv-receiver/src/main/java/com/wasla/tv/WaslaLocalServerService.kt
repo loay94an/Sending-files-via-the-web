@@ -21,6 +21,9 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import android.os.Handler
 import android.os.Looper
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
@@ -65,6 +68,8 @@ class WaslaLocalServerService : Service() {
     @Volatile private var discoverySocket: DatagramSocket? = null
     private val relayClient = OkHttpClient.Builder().pingInterval(20, java.util.concurrent.TimeUnit.SECONDS).build()
     @Volatile private var relaySocket: WebSocket? = null
+    @Volatile private var peerJsWebView: WebView? = null
+    @Volatile private var peerJsPageLoaded = false
     private val relayHandler = Handler(Looper.getMainLooper())
     private val relayReconnect = Runnable { connectRelayIfConfigured() }
     @Volatile private var discoveryThread: Thread? = null
@@ -74,15 +79,11 @@ class WaslaLocalServerService : Service() {
         startServer()
         startFileServer()
         startDiscoveryResponder()
-        connectRelayIfConfigured()
+        startPeerJsTransport()
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startServer()
-        if (intent?.action == ACTION_RECONNECT_RELAY) {
-            try { relaySocket?.close(1000, "Relay settings changed") } catch (_: Exception) { }
-            relaySocket = null
-        }
-        connectRelayIfConfigured()
+        if (intent?.action == ACTION_RECONNECT_RELAY) startPeerJsTransport()
         return START_STICKY
     }
     private fun startServer() {
@@ -124,6 +125,44 @@ class WaslaLocalServerService : Service() {
         }, "wasla-tv-file-server").apply { isDaemon = true; start() }
     }
 
+
+    private fun startPeerJsTransport() {
+        if (peerJsWebView != null) return
+        val web = try { WebView(this) } catch (_: Exception) { return }
+        peerJsWebView = web
+        web.settings.javaScriptEnabled = true
+        web.settings.domStorageEnabled = true
+        web.addJavascriptInterface(PeerJsNativeBridge(), "WaslaNative")
+        web.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String) {
+                peerJsPageLoaded = true
+                val id = deviceId(this@WaslaLocalServerService)
+                val code = pairCode(this@WaslaLocalServerService)
+                val peerId = "wasla-tv-" + id.replace("-", "").lowercase()
+                val options = JSONObject().put("role", "tv").put("deviceId", id)
+                    .put("pin", code).put("peerId", peerId)
+                view.evaluateJavascript("window.WaslaPeer && window.WaslaPeer.start($options)", null)
+            }
+        }
+        web.loadUrl("file:///android_asset/peerjs-transport.html")
+    }
+
+    private inner class PeerJsNativeBridge {
+        @JavascriptInterface fun onPeerId(id: String) { }
+        @JavascriptInterface fun onPeerStatus(value: String) { }
+        @JavascriptInterface fun onPeerReady() { }
+        @JavascriptInterface fun onPeerError(value: String) { }
+        @JavascriptInterface fun onPeerActionResult(result: String) { }
+        @JavascriptInterface fun onPeerAction(command: String, id: String) {
+            if (command.length > 12000 || id.length > 40) return
+            clients.execute {
+                val result = executeAction(command)
+                val js = "window.WaslaPeer && window.WaslaPeer.respond(" +
+                    JSONObject.quote(id) + "," + JSONObject.quote(result) + ")"
+                relayHandler.post { peerJsWebView?.evaluateJavascript(js, null) }
+            }
+        }
+    }
 
     private fun connectRelayIfConfigured() {
         if (!running.get() || relaySocket != null) return
@@ -498,6 +537,11 @@ class WaslaLocalServerService : Service() {
         acceptThread?.interrupt()
         discoveryThread?.interrupt()
         relayHandler.removeCallbacks(relayReconnect)
+        peerJsWebView?.let { web ->
+            try { web.evaluateJavascript("window.WaslaPeer && window.WaslaPeer.stop()", null) } catch (_: Exception) { }
+            try { web.stopLoading(); web.destroy() } catch (_: Exception) { }
+        }
+        peerJsWebView = null
         try { relaySocket?.close(1000, "TV receiver stopped") } catch (_: Exception) { }
         relaySocket = null
         relayClient.dispatcher.executorService.shutdown()
