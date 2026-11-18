@@ -212,6 +212,7 @@ class TvReceiverActivity : Activity() {
                 }
                 if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(service) else startService(service)
                 status.text = if (value.isBlank()) "تم تعطيل إعداد خادم الإنترنت" else "جارٍ الاتصال بخادم وصلة الآمن..."
+                render() // Regenerate the pairing QR so it carries the saved relay URL.
             }.show()
     }
 
