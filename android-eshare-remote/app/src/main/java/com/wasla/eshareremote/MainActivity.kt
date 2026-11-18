@@ -314,7 +314,10 @@ class MainActivity : Activity() {
         }
         val castButton = makeButton("▣  مشاهدة الشاشة", 48, true).apply {
             textSize = 13f
-            setOnClickListener { startActivity(Intent(this@MainActivity, ScreenViewerActivity::class.java)) }
+            setOnClickListener {
+                pausePeerJsForScreenViewer()
+                startActivity(Intent(this@MainActivity, ScreenViewerActivity::class.java))
+            }
         }
         shortcuts.addView(castButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(5) })
         val filesButton = makeButton("⇧  نقل الملفات", 48).apply {
@@ -2660,6 +2663,28 @@ class MainActivity : Activity() {
         try { tcp?.close() } catch (_: Exception) { }
         output = null
         tcp = null
+    }
+
+    private fun pausePeerJsForScreenViewer() {
+        peerJsConnected = false
+        peerActionTimeouts.values.forEach { gestureHandler.removeCallbacks(it) }
+        peerActionTimeouts.clear()
+        peerJsWebView?.let { web ->
+            try { web.evaluateJavascript("window.WaslaPeer && window.WaslaPeer.stop()", null) } catch (_: Exception) {}
+            try { (web.parent as? ViewGroup)?.removeView(web) } catch (_: Exception) {}
+            try { web.stopLoading(); web.destroy() } catch (_: Exception) {}
+        }
+        peerJsWebView = null
+        peerJsPageLoaded = false
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (peerJsWebView == null) {
+            val id = prefs.getString("wasla_tv_id", "").orEmpty()
+            val code = prefs.getString("wasla_tv_code", "").orEmpty()
+            if (id.isNotBlank() && code.isNotBlank()) startPeerJsTransport(id, code)
+        }
     }
 
     override fun onDestroy() {
