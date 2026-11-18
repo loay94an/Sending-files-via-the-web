@@ -123,7 +123,6 @@ class WaslaLocalServerService : Service() {
             ACTION_STOP_SCREEN -> {
                 screenSender?.stop()
                 screenSender = null
-                peerControlConnected = false
                 mjpegServer?.stop()
                 mjpegServer = null
             }
