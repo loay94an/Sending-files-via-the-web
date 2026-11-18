@@ -156,6 +156,18 @@ class TvReceiverActivity : Activity() {
             }
         }, match())
         root.addView(Button(this).apply {
+            text = "بدء بث محلي للشاشة (MJPEG)"
+            isAllCaps = false
+            setOnClickListener {
+                try {
+                    val manager = getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
+                    startActivityForResult(manager.createScreenCaptureIntent(), 38474)
+                } catch (_: Exception) {
+                    status.text = "تعذر بدء التقاط الشاشة المحلية"
+                }
+            }
+        }, match())
+        root.addView(Button(this).apply {
             text = "إيقاف بث الشاشة"
             isAllCaps = false
             setOnClickListener {
@@ -203,15 +215,15 @@ class TvReceiverActivity : Activity() {
     @Deprecated("Deprecated in Android API; retained for minSdk 21 compatibility")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 38473) {
+        if (requestCode == 38473 || requestCode == 38474) {
             if (resultCode == RESULT_OK && data != null) {
                 val serviceIntent = Intent(this, WaslaLocalServerService::class.java)
-                    .setAction(WaslaLocalServerService.ACTION_START_SCREEN)
+                    .setAction(if (requestCode == 38473) WaslaLocalServerService.ACTION_START_SCREEN else WaslaLocalServerService.ACTION_START_SCREEN_MJPEG)
                     .putExtra(WaslaLocalServerService.EXTRA_RESULT_CODE, resultCode)
                     .putExtra(WaslaLocalServerService.EXTRA_PERMISSION_DATA, data)
                 try {
                     if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(serviceIntent) else startService(serviceIntent)
-                    status.text = "تمت الموافقة — جارٍ تجهيز بث الشاشة المباشر عبر WebRTC"
+                    status.text = if (requestCode == 38473) "تمت الموافقة — جارٍ تجهيز بث الشاشة المباشر عبر WebRTC" else "تمت الموافقة — جارٍ تشغيل بث الشاشة المحلي عبر MJPEG"
                 } catch (_: Exception) {
                     status.text = "تعذر تشغيل خدمة بث الشاشة"
                 }
