@@ -2310,7 +2310,7 @@ class MainActivity : Activity() {
         val js = "window.WaslaPeer && window.WaslaPeer.send(" +
             JSONObject.quote(command) + "," + JSONObject.quote(id) + ")"
         return try {
-            web.post {
+            val posted = web.post {
                 web.evaluateJavascript(js) { result ->
                     if (result != "true") {
                         peerActionTimeouts.remove(id)?.let { gestureHandler.removeCallbacks(it) }
@@ -2320,6 +2320,8 @@ class MainActivity : Activity() {
                     }
                 }
             }
+            if (!posted) peerActionTimeouts.remove(id)?.let { gestureHandler.removeCallbacks(it) }
+            posted
         } catch (_: Exception) {
             peerActionTimeouts.remove(id)?.let { gestureHandler.removeCallbacks(it) }
             false
@@ -2375,6 +2377,10 @@ class MainActivity : Activity() {
         @JavascriptInterface fun onPeerStatus(value: String) {
             runOnUiThread {
                 peerJsConnected = value == "connected"
+                if (!peerJsConnected) {
+                    peerActionTimeouts.values.forEach { gestureHandler.removeCallbacks(it) }
+                    peerActionTimeouts.clear()
+                }
                 when (value) {
                     "connected" -> setStatus("اتصال التحكم عبر الإنترنت جاهز")
                     "disconnected" -> setStatus("انقطع مسار الإنترنت — ستتم إعادة المحاولة")
@@ -2661,6 +2667,7 @@ class MainActivity : Activity() {
         connectionMonitor.shutdownNow()
         closeWaslaReceiver()
         peerJsConnected = false
+        peerActionTimeouts.clear()
         peerJsWebView?.let { web ->
             try { web.evaluateJavascript("window.WaslaPeer && window.WaslaPeer.stop()", null) } catch (_: Exception) { }
             try { (web.parent as? ViewGroup)?.removeView(web) } catch (_: Exception) { }
