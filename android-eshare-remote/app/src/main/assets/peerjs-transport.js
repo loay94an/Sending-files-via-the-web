@@ -113,16 +113,20 @@
       });
       next.on("data", handleMobileData);
       next.on("close", function () {
-        if (connection === next) connection = null;
-        authorized = false;
-        status("disconnected");
-        scheduleRetry(4000);
+        if (connection === next) {
+          connection = null;
+          authorized = false;
+          status("disconnected");
+          scheduleRetry(4000);
+        }
       });
       next.on("error", function () {
-        if (connection === next) connection = null;
-        authorized = false;
-        status("connection-error");
-        scheduleRetry(5000);
+        if (connection === next) {
+          connection = null;
+          authorized = false;
+          status("connection-error");
+          scheduleRetry(5000);
+        }
       });
     } catch (_) {
       status("connection-error");
