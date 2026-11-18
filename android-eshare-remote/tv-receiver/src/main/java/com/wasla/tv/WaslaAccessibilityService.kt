@@ -1,6 +1,7 @@
 package com.wasla.tv
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Intent
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.media.AudioManager
@@ -72,6 +73,11 @@ class WaslaAccessibilityService : AccessibilityService() {
         "VOLUME_UP" -> adjustVolume(AudioManager.ADJUST_RAISE)
         "VOLUME_DOWN" -> adjustVolume(AudioManager.ADJUST_LOWER)
         "MUTE" -> if (Build.VERSION.SDK_INT >= 23) adjustVolume(AudioManager.ADJUST_TOGGLE_MUTE) else false
+        "POWER_DIALOG" -> if (Build.VERSION.SDK_INT >= 21) performGlobalAction(GLOBAL_ACTION_POWER_DIALOG) else false
+        "ASSIST" -> try {
+            startActivity(Intent(Intent.ACTION_ASSIST).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (_: Exception) { false }
         else -> false
     }
 
