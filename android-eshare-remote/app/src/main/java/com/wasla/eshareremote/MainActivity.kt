@@ -2158,6 +2158,7 @@ class MainActivity : Activity() {
                     socket.close()
                     throw IllegalStateException("هوية مستقبل وصلة لا تطابق رمز QR")
                 }
+                val controlReady = info.getOrNull(3) == "CONTROL_READY"
                 socket.soTimeout = 20000
                 synchronized(waslaTvLock) {
                     waslaTvSocket = socket
@@ -2169,7 +2170,10 @@ class MainActivity : Activity() {
                 prefs.edit().putString("wasla_tv_ip", ip).putString("wasla_tv_code", code)
                     .putString("wasla_tv_id", expectedDeviceId ?: "").apply()
                 runOnUiThread { connectionIpLabel?.text = "⌁  $ip" }
-                setStatus("متصل بمستقبل وصلة على التلفاز — اتصال محلي")
+                setStatus(
+                    if (controlReady) "تم الاقتران والتحكم جاهز — $ip"
+                    else "تم الاقتران، لكن التحكم غير مفعّل على التلفاز. افتح وصلة TV وفعّل خدمة إمكانية الوصول."
+                )
                 connectWaslaRelay()
                 Thread({
                     try {
