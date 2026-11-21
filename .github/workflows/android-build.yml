@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/android-build.yml'
       - 'bootstrap/**'
+      - 'Concepts-Arabic/**'
   workflow_dispatch:
 
 permissions:
